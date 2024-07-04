@@ -13,30 +13,37 @@ ctapipe_input = os.environ.get("CTAPIPE_SVC_PATH")
 
 subprocess.call(f'rm {ctapipe_output}/output_plots/*.png', shell=True)
 
-telescope_type = 'MST_SCT_SCTCam'
-#telescope_type = 'MST_MST_NectarCam'
+#telescope_type = 'MST_SCT_SCTCam'
+telescope_type = 'MST_MST_NectarCam'
 #telescope_type = 'MST_MST_FlashCam'
 #telescope_type = 'SST_1M_DigiCam'
 #telescope_type = 'SST_ASTRI_ASTRICam'
 #telescope_type = 'SST_GCT_CHEC'
 #telescope_type = 'LST_LST_LSTCam'
 
-list_files = 'sim_files.txt'
+#sim_files = 'sct_onaxis_train.txt'
+#sim_files = 'sct_onaxis_test.txt'
+#sim_files = 'sct_diffuse_all.txt'
+sim_files = 'mst_onaxis_train.txt'
+#sim_files = 'mst_onaxis_test.txt'
+#sim_files = 'mst_diffuse_all.txt'
 
-n_samples = 0
 big_truth_matrix = []
 big_moment_matrix = []
 big_image_matrix = []
 big_time_matrix = []
 big_movie_matrix = []
-with open(f'{ctapipe_input}/{list_files}', 'r') as file:
+with open(f'{ctapipe_input}/{sim_files}', 'r') as file:
     for line in file:
-        training_sample_path = get_dataset_path(line.strip('\n'))
 
-        source = SimTelEventSource(training_sample_path, focal_length_choice='EQUIVALENT')
-        subarray = source.subarray
-        ob_keys = source.observation_blocks.keys()
-        run_id = list(ob_keys)[0]
+        #training_sample_path = get_dataset_path(line.strip('\n'))
+        #source = SimTelEventSource(training_sample_path, focal_length_choice='EQUIVALENT')
+        #subarray = source.subarray
+        #ob_keys = source.observation_blocks.keys()
+        #run_id = list(ob_keys)[0]
+
+        training_sample_path = line.strip('\n')
+        run_id = training_sample_path.split("_")[3].strip("run")
         output_filename = f'{ctapipe_output}/output_samples/training_sample_run{run_id}_{telescope_type}.pkl'
         print (f'loading pickle trainging sample data: {output_filename}')
         if not os.path.exists(output_filename):

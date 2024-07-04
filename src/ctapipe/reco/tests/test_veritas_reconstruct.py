@@ -21,15 +21,21 @@ telescope_type = 'MST_SCT_SCTCam'
 #telescope_type = 'SST_GCT_CHEC'
 #telescope_type = 'LST_LST_LSTCam'
 
-list_files = 'sim_files.txt'
+#sim_files = 'sct_onaxis_train.txt'
+sim_files = 'sct_onaxis_test.txt'
+#sim_files = 'sct_diffuse_all.txt'
+#sim_files = 'mst_onaxis_train.txt'
+#sim_files = 'mst_onaxis_test.txt'
+#sim_files = 'mst_diffuse_all.txt'
 
-n_samples = 0
-with open(f'{ctapipe_input}/{list_files}', 'r') as file:
+with open(f'{ctapipe_input}/{sim_files}', 'r') as file:
     for line in file:
         training_sample_path = get_dataset_path(line.strip('\n'))
-        n_samples += 1
-        #if not '744' in line: continue
-        if (n_samples % 2)==0: continue
-        loop_all_events(training_sample_path,ctapipe_output,telescope_type)
-        #exit()
+
+        run_id = line.split("_")[3].strip("run")
+        print (f"run_id = {run_id}")
+        #if run_id!="897": continue
+
+        loop_all_events(training_sample_path,ctapipe_output,telescope_type,save_output=True)
+        #loop_all_events(training_sample_path,ctapipe_output,telescope_type,save_output=False)
 
