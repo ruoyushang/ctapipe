@@ -25,13 +25,12 @@ cleaning_level = {
     "CHEC": (2, 4, 2),
     "LSTCam": (3.5, 7, 2),
     "FlashCam": (3.5, 7, 2),
-    "NectarCam": (4, 8, 2),
-    # "SCTCam": (5, 8, 2),
+    "NectarCam": (3.5, 7, 2),
     "SCTCam": (2, 5, 2),
 }
 
-image_size_cut = 100.0
-plot_image_size_cut = 5000.0
+mask_size_cut = 5.0
+plot_mask_size_cut = 20.0
 
 n_bins_arrival = 20
 arrival_lower = 0.0
@@ -50,13 +49,13 @@ select_samples = 16
 select_run_id = 0
 select_event_id = 0
 #select_run_id = 811
-#select_event_id = 6909
+#select_event_id = 93502
 
-use_template = True
-#use_template = False
+#use_template = True
+use_template = False
 
 def image_translation_and_rotation(
-    geometry, list_input_image_1d, shift_x, shift_y, angle_rad
+    geometry, list_input_image_1d, shift_x, shift_y, angle_rad, reposition=True,
 ):
     """
     Function to perform rotation and translation of a list of images.
@@ -80,6 +79,9 @@ def image_translation_and_rotation(
         Array of 1-D images
 
     """
+
+    if not reposition:
+        return list_input_image_1d
 
     pixel_width = float(geometry.pixel_width[0] / u.m)
     rotation_matrix = np.array(
@@ -322,8 +324,10 @@ def find_intersection_multiple_lines(
     list_a_err,
     list_b_err,
     list_intensity,
+    list_angle_err,
     list_length,
     list_width,
+    list_pixel_width,
 ):
     # y = a*x + b, weight = 1./b_err
 
@@ -334,8 +338,10 @@ def find_intersection_multiple_lines(
     a_err = np.array(list_a_err)
     b_err = np.array(list_b_err)
     intensity = np.array(list_intensity)
+    angle_err = np.array(list_angle_err)
     length = np.array(list_length)
     width = np.array(list_width)
+    pixel_width = np.array(list_pixel_width)
     w = intensity*length/width
 
     pair_weight = []
@@ -353,7 +359,9 @@ def find_intersection_multiple_lines(
             pair_fit_y = -x_mtx[0]
             dist_sq_1 = pow(pair_fit_x - x[i1],2) + pow(pair_fit_y - y[i1],2)
             dist_sq_2 = pow(pair_fit_x - x[i2],2) + pow(pair_fit_y - y[i2],2)
-            pair_fit_err = pow(dist_sq_1*a_err[i1]*a_err[i1]/np.pi + dist_sq_2*a_err[i2]*a_err[i2]/np.pi,0.5) * 1. / pow(np.sin(open_angle),2)
+            pair_fit_err = dist_sq_1*angle_err[i1]*angle_err[i1]/np.pi
+            pair_fit_err += dist_sq_2*angle_err[i2]*angle_err[i2]/np.pi
+            pair_fit_err = pow(pair_fit_err,0.5) / pow(np.sin(open_angle),2)
             #print (f"np.sin(open_angle) = {np.sin(open_angle)}")
             pair_x += [pair_fit_x]
             pair_y += [pair_fit_y]
@@ -367,12 +375,9 @@ def find_intersection_multiple_lines(
             ambiguity_err = pow(fov*ambiguity,0.5)
             #print (f"pair_fit_err = {pair_fit_err*180./np.pi} deg")
             #print (f"ambiguity_err = {ambiguity_err*180./np.pi} deg")
-            pair_err += [max(pair_fit_err,ambiguity_err)]
-            pair_weight += [
-                (intensity[i1] * length[i1] / width[i1])
-                * (intensity[i2] * length[i2] / width[i2])
-                * pow(np.sin(open_angle),2)
-            ]
+            max_pixel_width = max(pixel_width[i1],pixel_width[i2])
+            pair_err += [max(max_pixel_width,max(pair_fit_err,ambiguity_err))]
+            pair_weight += [ intensity[i1] * intensity[i2] ]
 
     pair_x = np.array(pair_x)
     pair_y = np.array(pair_y)
@@ -385,11 +390,13 @@ def find_intersection_multiple_lines(
     fit_weight = 0.0
     for xing in range(0, len(pair_x)):
         error_sq = pair_err[xing] * pair_err[xing]
-        weight = 1.0 / error_sq
+        weight = 1. / error_sq
+        #weight = pair_weight[xing] / error_sq
         fit_weight += weight
         fit_x += pair_x[xing] * weight
         fit_y += pair_y[xing] * weight
         fit_err += pair_err[xing] * pair_err[xing] * weight
+        #print (f"pair_x[xing] = {pair_x[xing]:0.3f}, pair_y[xing] = {pair_y[xing]:0.3f}, pair_err[xing] = {pair_err[xing]:0.3f}")
     fit_x = fit_x / fit_weight
     fit_y = fit_y / fit_weight
     fit_err = pow(fit_err / fit_weight, 0.5)
@@ -399,7 +406,8 @@ def find_intersection_multiple_lines(
     fit_weight = 0.0
     for xing in range(0, len(pair_x)):
         error_sq = pair_err[xing] * pair_err[xing]
-        weight = 1.0 / error_sq
+        weight = 1. / error_sq
+        #weight = pair_weight[xing] / error_sq
         fit_weight += weight
         fit_rms += (
             pow(pair_x[xing] - fit_x, 2) + pow(pair_y[xing] - fit_y, 2)
@@ -442,7 +450,7 @@ def find_image_features(
         image_center_y += float(geometry.pix_y[pix] / u.m) * input_image_1d[pix]
         center_time += input_time_1d[pix] * input_image_1d[pix]
 
-    if image_size < image_size_cut:
+    if mask_size < mask_size_cut:
         return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     mask_center_x = mask_center_x / mask_size
@@ -486,21 +494,29 @@ def find_image_features(
     aT, bT, aT_err, bT_err, chi2T = fit_image_to_line(
         geometry, input_image_1d, transpose=True
     )
-    # if chi2 > chi2T and aT != 0.0:
-    #    a = 1.0 / aT
-    #    b = -bT / aT
-    #    a_err = aT_err
-    #    b_err = bT_err
 
-    if aT != 0.0:
+    #print (f"++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+    #print (f"image_center_x = {image_center_x:0.3f}, image_center_y = {image_center_y:0.3f}")
+    #print (f"semi_minor/semi_major = {pow(semi_minor_sq/semi_major_sq,0.5)}")
+    #print (f"a = {a}, a_err = {a_err}, chi2 = {chi2:0.3f}")
+    #print (f"aT = {aT}, aT_err = {aT_err}, chi2T = {chi2T:0.3f}")
+
+    axis_ratio = pow(semi_minor_sq/semi_major_sq,0.5)
+    if a_err/axis_ratio<1e-2:
+        chi2 = 1e10
+    if aT_err/axis_ratio<1e-2:
+        chi2T = 1e10
+
+    if aT != 0.0 and chi2!=0. and chi2T!=0.:
         weight = 1.0 / chi2 + 1.0 / chi2T
         a = (a * 1.0 / chi2 + 1.0 / aT * 1.0 / chi2T) / weight
         b = (b * 1.0 / chi2 - bT / aT * 1.0 / chi2T) / weight
         a_err = (a_err * 1.0 / chi2 + aT_err * 1.0 / chi2T) / weight
         b_err = (b_err * 1.0 / chi2 + bT_err * 1.0 / chi2T) / weight
+    else:
+        return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
-    if a_err == np.inf:
-        return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    #print (f"final a = {a:0.3f}, a_err = {a_err:0.3f}")
 
     angle = np.arctan(a)
     angle_err = abs(np.arctan(a + a_err) - np.arctan(a - a_err))
@@ -559,7 +575,7 @@ def find_image_features(
         angle = angle + np.pi
 
     return [
-        image_size,
+        mask_size,
         image_center_x,
         image_center_y,
         angle,
@@ -666,6 +682,7 @@ def make_standard_movie(
     event,
     flip=False,
     star_cam_xy=None,
+    reposition=True,
 ):
     event_id = event.index["event_id"]
     geometry = subarray.tel[tel_id].camera.geometry
@@ -767,7 +784,7 @@ def make_standard_movie(
     image_feature_array = find_image_features(
         geometry, clean_image_1d, clean_time_1d, flip=flip, star_cam_xy=star_cam_xy
     )
-    image_size = image_feature_array[0]
+    mask_size = image_feature_array[0]
     image_center_x = image_feature_array[1]
     image_center_y = image_feature_array[2]
     angle = image_feature_array[3]
@@ -781,9 +798,8 @@ def make_standard_movie(
     line_a_err = image_feature_array[11]
     line_b_err = image_feature_array[12]
     angle_err = image_feature_array[13]
-    # print(f"image_size = {image_size:0.1f}")
 
-    if image_size < image_size_cut:
+    if mask_size < mask_size_cut:
         return is_edge_image, image_feature_array, [], [], []
 
     center_time_window = 0.0
@@ -817,6 +833,7 @@ def make_standard_movie(
         image_center_x,
         image_center_y,
         (angle + 0.5 * np.pi) * u.rad,
+        reposition=reposition,
     )
 
     whole_movie_1d = []
@@ -839,6 +856,7 @@ def make_standard_movie(
         image_center_x,
         image_center_y,
         (angle + 0.5 * np.pi) * u.rad,
+        reposition=reposition,
     )
     rotate_image_1d = list_rotat_image_1d[0]
     rotate_time_1d = list_rotat_image_1d[1]
@@ -854,67 +872,6 @@ def make_standard_movie(
     eco_image_1d = image_cutout(geometry, rotate_image_1d, pixs_to_keep=pixs_to_keep)
     eco_time_1d = image_cutout(geometry, rotate_time_1d, pixs_to_keep=pixs_to_keep)
 
-    # if image_size > plot_image_size_cut:
-    #    xmax = max(geometry.pix_x) / u.m
-    #    xmin = min(geometry.pix_x) / u.m
-    #    ymax = max(geometry.pix_y) / u.m
-    #    ymin = min(geometry.pix_y) / u.m
-    #    font = {
-    #        "family": "serif",
-    #        "color": "white",
-    #        "weight": "normal",
-    #        "size": 10,
-    #        "rotation": 0.0,
-    #    }
-
-    #    fig, ax = plt.subplots()
-    #    figsize_x = 8.6
-    #    figsize_y = 6.4
-    #    fig.set_figheight(figsize_y)
-    #    fig.set_figwidth(figsize_x)
-    #    label_x = "X"
-    #    label_y = "Y"
-    #    ax.set_xlabel(label_x)
-    #    ax.set_ylabel(label_y)
-    #    im = ax.imshow(clean_image_2d, origin="lower", extent=(xmin, xmax, ymin, ymax))
-    #    cbar = fig.colorbar(im)
-    #    ax.scatter(0.0, 0.0, s=90, facecolors="none", edgecolors="r", marker="o")
-    #    if np.cos(angle * u.rad) > 0.0:
-    #        line_x = np.linspace(image_center_x, xmax, 100)
-    #        line_y = -(line_a * line_x + line_b)
-    #        ax.plot(line_x, line_y, color="w", alpha=0.3, linestyle="dashed")
-    #        line_y = -(
-    #            (line_a + line_a_err) * line_x + line_b - line_a_err * image_center_x
-    #        )
-    #        ax.plot(line_x, line_y, color="w", alpha=0.3, linestyle="solid")
-    #        line_y = -(
-    #            (line_a - line_a_err) * line_x + line_b + line_a_err * image_center_x
-    #        )
-    #        ax.plot(line_x, line_y, color="w", alpha=0.3, linestyle="solid")
-    #    else:
-    #        line_x = np.linspace(xmin, image_center_x, 100)
-    #        line_y = -(line_a * line_x + line_b)
-    #        ax.plot(line_x, line_y, color="w", alpha=0.3, linestyle="dashed")
-    #        line_y = -(
-    #            (line_a + line_a_err) * line_x + line_b - line_a_err * image_center_x
-    #        )
-    #        ax.plot(line_x, line_y, color="w", alpha=0.3, linestyle="solid")
-    #        line_y = -(
-    #            (line_a - line_a_err) * line_x + line_b + line_a_err * image_center_x
-    #        )
-    #        ax.plot(line_x, line_y, color="w", alpha=0.3, linestyle="solid")
-    #    ax.set_xlim(xmin, xmax)
-    #    ax.set_ylim(ymin, ymax)
-    #    # txt = ax.text(-0.35, 0.35, 'image size = %0.2e'%(image_size), fontdict=font)
-    #    # txt = ax.text(-0.35, 0.32, 'image direction = %0.2e'%(image_direction), fontdict=font)
-    #    # txt = ax.text(-0.35, 0.29, 'time direction = %0.2e'%(time_direction), fontdict=font)
-    #    fig.savefig(
-    #        f"{ctapipe_output}/output_plots/evt{event_id}_tel{tel_id}_clean_image.png",
-    #        bbox_inches="tight",
-    #    )
-    #    del fig
-    #    del ax
-    #    plt.close()
 
     return is_edge_image, image_feature_array, whole_movie_1d, eco_image_1d, eco_time_1d
 
@@ -944,11 +901,10 @@ def analyze_a_training_image(
         star_cam_xy=star_cam_xy,
     )
 
-    image_size = image_feature_array[0]
-    # print(f"image_size = {image_size:0.3f}")
+    mask_size = image_feature_array[0]
 
-    if image_size < image_size_cut:
-        print("failed image_size_cut.")
+    if mask_size < mask_size_cut:
+        print("failed mask_size_cut.")
         return None
     if is_edge_image:
         print("failed: edge image.")
@@ -1319,11 +1275,13 @@ def MakeLookupTable(
                 arrival,
                 impact,
                 log_energy,
-                weight=image_latent_space[r] * 1.0 / image_angle_err,
+                weight=image_latent_space[r] * 0.0001 / image_angle_err,
+                #weight=image_latent_space[r] * 1.0,
             )
 
         lookup_table_norm.fill(
-            arrival, impact, log_energy, weight=1.0 / image_angle_err
+            arrival, impact, log_energy, weight=0.0001 / image_angle_err
+            #arrival, impact, log_energy, weight=1.0
         )
 
     for r in range(0, image_rank):
@@ -1331,7 +1289,7 @@ def MakeLookupTable(
 
     n_empty_cells = 0.0
     n_filled_cells = 0.0
-    n_training_images = 0.0
+    n_training_images = float(len(list_log_energy))
     for idx_x in range(0, len(lookup_table_norm.xaxis) - 1):
         for idx_y in range(0, len(lookup_table_norm.yaxis) - 1):
             for idx_z in range(0, len(lookup_table_norm.zaxis) - 1):
@@ -1340,7 +1298,6 @@ def MakeLookupTable(
                     n_empty_cells += 1.0
                 else:
                     n_filled_cells += 1.0
-                n_training_images += float(count)
     avg_images_per_cell = n_training_images / n_filled_cells
     print(
         f"n_empty_cells = {n_empty_cells}, n_filled_cells = {n_filled_cells}, n_training_images = {n_training_images}, avg_images_per_cell = {avg_images_per_cell:0.1f}"
@@ -1474,7 +1431,7 @@ def MakeFastConversionImage(
     truth_matrix,
     pkl_name,
 ):
-    list_image_size = []
+    list_mask_size = []
     list_evt_weight = []
     list_arrival = []
     list_impact = []
@@ -1483,7 +1440,7 @@ def MakeFastConversionImage(
 
     for img in range(0, len(big_image_matrix)):
 
-        image_size = feature_matrix[img][0]
+        mask_size = feature_matrix[img][0]
         image_center_x = feature_matrix[img][1]
         image_center_y = feature_matrix[img][2]
         time_direction = feature_matrix[img][6]
@@ -1514,8 +1471,8 @@ def MakeFastConversionImage(
         time_latent_space = time_eigenvectors @ time_1d
         list_latent_space += [np.concatenate((image_latent_space, time_latent_space))]
 
-        list_image_size += [image_size]
-        list_evt_weight += [1.0 / image_angle_err]
+        list_mask_size += [mask_size]
+        list_evt_weight += [0.0001 / image_angle_err]
         list_arrival += [arrival]
         list_impact += [impact]
         list_log_energy += [log_energy]
@@ -1800,7 +1757,8 @@ def analyze_short_list(
         err_log_energy = 0.0
         sum_likelihood = 0.0
         for entry in range(0, len(list_likelihood)):
-            norm_likelihood = 1.0 / (list_chi2[entry])
+            #norm_likelihood = 1.0 / (list_chi2[entry])
+            norm_likelihood = fit_chi2 / (list_chi2[entry])
             err_arrival += pow(list_arrival[entry] - fit_arrival, 2) * norm_likelihood
             err_impact += pow(list_impact[entry] - fit_impact, 2) * norm_likelihood
             err_log_energy += (
@@ -1832,7 +1790,7 @@ def single_movie_reconstruction(
     input_movie_1d,
     movie_lookup_table,
     movie_eigen_vectors,
-    fast_conversion_poly,
+    #fast_conversion_poly,
 ):
     arrival_step_size = (arrival_upper - arrival_lower) / float(n_bins_arrival)
     impact_step_size = (impact_upper - impact_lower) / float(n_bins_impact)
@@ -1844,15 +1802,16 @@ def single_movie_reconstruction(
     combine_latent_space = np.concatenate((image_latent_space, time_latent_space))
 
     image_size = np.sum(input_movie_1d)
-    fit_arrival = linear_model(combine_latent_space, fast_conversion_poly[0])
-    fit_impact = linear_model(combine_latent_space, fast_conversion_poly[1])
-    fit_log_energy = linear_model(combine_latent_space, fast_conversion_poly[2])
+
+    #fit_arrival = linear_model(combine_latent_space, fast_conversion_poly[0])
+    #fit_impact = linear_model(combine_latent_space, fast_conversion_poly[1])
+    #fit_log_energy = linear_model(combine_latent_space, fast_conversion_poly[2])
     # print(
     #    f"initial fit_arrival = {fit_arrival}, fit_impact = {fit_impact}, fit_log_energy = {fit_log_energy}"
     # )
 
-    init_params = [fit_arrival, fit_impact, fit_log_energy]
-    fit_chi2 = 0.0
+    #init_params = [fit_arrival, fit_impact, fit_log_energy]
+    #fit_chi2 = 0.0
 
     found_minimum = False
     fit_chi2 = 1e10
@@ -1862,6 +1821,9 @@ def single_movie_reconstruction(
     impact_range = param_search_range * impact_step_size
     log_energy_range = param_search_range * log_energy_step_size
 
+    fit_arrival = 0.2
+    fit_impact = 400.
+    fit_log_energy = 0.0
     init_params = [fit_arrival, fit_impact, fit_log_energy]
     (
         short_list,
@@ -2241,7 +2203,7 @@ def plot_monotel_reconstruction(
     clean_time_2d = geometry.image_to_cartesian_representation(clean_time_1d)
     remove_nan_pixels(clean_time_2d)
 
-    image_size = image_feature_array[0]
+    mask_size = image_feature_array[0]
     image_center_x = image_feature_array[1]
     image_center_y = image_feature_array[2]
     angle = image_feature_array[3]
@@ -2449,7 +2411,7 @@ def run_monoscopic_analysis(
     run_id,
     source,
     event,
-    fast_conversion_poly_pkl,
+    #fast_conversion_poly_pkl,
     movie_lookup_table_pkl,
     movie_eigen_vectors_pkl,
     image_lookup_table_pkl,
@@ -2545,8 +2507,8 @@ def run_monoscopic_analysis(
         toc_standard = time.perf_counter()
         # print(f"standard: {toc_standard-tic_standard:0.1f} sec")
 
-        image_size = image_feature_array[0]
-        if image_size < image_size_cut:
+        mask_size = image_feature_array[0]
+        if mask_size < mask_size_cut:
             continue
         if is_edge_image:
             continue
@@ -2570,7 +2532,7 @@ def run_monoscopic_analysis(
             eco_movie_1d,
             movie_lookup_table_pkl,
             movie_eigen_vectors_pkl,
-            fast_conversion_poly_pkl,
+            #fast_conversion_poly_pkl,
         )
         toc_reco = time.perf_counter()
         # print(f"reco: {toc_reco-tic_reco:0.1f} sec")
@@ -2614,15 +2576,16 @@ def run_monoscopic_analysis(
                 eco_movie_1d_flip,
                 movie_lookup_table_pkl,
                 movie_eigen_vectors_pkl,
-                fast_conversion_poly_pkl,
+                #fast_conversion_poly_pkl,
             )
 
             # print (f"image_fit_chi2 = {image_fit_chi2}")
             # print (f"image_fit_chi2_flip = {image_fit_chi2_flip}")
             image_ambiguity = 1.0 / (
                 # abs(image_direction) * abs(image_fit_chi2 - image_fit_chi2_flip) / abs(image_fit_chi2 + image_fit_chi2_flip)
-                abs(image_direction) * abs(image_fit_chi2 - image_fit_chi2_flip) / 25.0
+                abs(image_direction) * abs(image_fit_chi2 - image_fit_chi2_flip) / 100.0
             )
+            print (f"image_ambiguity = {image_ambiguity}")
             add_ambiguity_unc = max(0.0, image_ambiguity - 1.0)
 
             if image_fit_chi2_flip < image_fit_chi2 and abs(image_direction) < 1.0:
@@ -2637,6 +2600,8 @@ def run_monoscopic_analysis(
 
         image_center_x = image_feature_array[1]
         image_center_y = image_feature_array[2]
+        image_semi_major = image_feature_array[4]
+        image_semi_minor = image_feature_array[5]
         angle = image_feature_array[3]
         angle_err = image_feature_array[13]
 
@@ -2658,8 +2623,6 @@ def run_monoscopic_analysis(
             image_fit_alt - image_center_alt
         )
         line_altaz_b = image_center_az - line_altaz_a * image_center_alt
-        # line_altaz_err = pow(pow(image_fit_arrival*angle_err,2)+pow(line_b_err,2),0.5)
-        line_altaz_err = angle_err
 
         xing_arrival = pow(
             pow(xing_cam_x - image_center_x, 2) + pow(xing_cam_y - image_center_y, 2),
@@ -2667,12 +2630,19 @@ def run_monoscopic_analysis(
         )
         image_method_unc = (
             pow(
-                pow(angle_err * xing_arrival, 2) + pow(image_fit_arrival_err, 2),
-                # pow(angle_err * xing_arrival, 2),
+                pow(angle_err * xing_arrival, 2) + pow(image_fit_arrival_err, 2) + pow(line_b_err,2),
                 0.5,
             )
             / focal_length
         )
+        pixel_width = float(source.subarray.tel[tel_id].camera.geometry.pixel_width[0] / u.m)
+        image_method_unc = max(image_method_unc,pixel_width/focal_length)
+
+        #print (f"angle_err * xing_arrival = {angle_err * xing_arrival}")
+        #print (f"image_fit_arrival_err = {image_fit_arrival_err}")
+        #print (f"line_b_err = {line_b_err}")
+        print (f"image_method_unc = {image_method_unc}")
+        print (f"add_ambiguity_unc = {add_ambiguity_unc}")
         image_method_unc = pow(
             pow(add_ambiguity_unc, 2) + pow(image_method_unc, 2), 0.5
         )
@@ -2702,20 +2672,19 @@ def run_monoscopic_analysis(
         list_tel_log_energy += [image_fit_log_energy]
         list_tel_weight += [pow(1.0 / image_method_unc, 2)]
         print(
-            f"image_size = {image_size:0.1f}, image_method_unc = {image_method_unc*180./np.pi:0.3f}, image_method_off_angle = {image_method_error:0.3f}"
+            f"mask_size = {mask_size}, image_method_unc = {image_method_unc*180./np.pi:0.3f}, image_method_off_angle = {image_method_error:0.3f}"
         )
 
         list_tel_id += [tel_id]
         list_image_feature += [image_feature_array]
 
         if (
-            image_size > plot_image_size_cut
-            #image_size > image_size_cut
-            #and image_method_error > 0.6
-            #and image_method_unc * 180.0 / np.pi < 0.5
+            #mask_size > plot_mask_size_cut
+            mask_size > mask_size_cut
+            and image_method_error / (image_method_unc * 180.0 / np.pi) > 4.0
         ):
             print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-            print(f"image_size = {image_size}")
+            print(f"mask_size = {mask_size}")
             print(f"image_method_unc = {image_method_unc*180./np.pi:0.3f} deg")
             print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
             fit_params = [image_fit_arrival, image_fit_impact, image_fit_log_energy]
@@ -2757,6 +2726,7 @@ def run_monoscopic_analysis(
                 data_movie,
                 sim_movie,
             )
+            #exit()
 
     avg_tmp_alt = 0.0
     avg_tmp_az = 0.0
@@ -2830,6 +2800,7 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
 
     list_line_x = []
     list_line_y = []
+    list_line_angle_err = []
     list_line_intensity = []
     list_line_length = []
     list_line_width = []
@@ -2840,12 +2811,15 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
     list_line_w = []
     list_tel_id = []
     list_image_feature = []
+    list_pixel_width = []
 
     for tel_idx in range(0, len(list(event.dl0.tel.keys()))):
         tel_id = list(event.dl0.tel.keys())[tel_idx]
 
         if str(telescope_type) != str(source.subarray.tel[tel_id]):
             continue
+
+        pixel_width = float(source.subarray.tel[tel_id].camera.geometry.pixel_width[0] / u.m)
 
         truth_info_array = find_image_truth(
             source, source.subarray, run_id, tel_id, event
@@ -2877,10 +2851,11 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
             tel_id,
             event,
             flip=False,
+            reposition=False,
         )
 
-        image_size = image_feature_array[0]
-        if image_size < image_size_cut:
+        mask_size = image_feature_array[0]
+        if mask_size < mask_size_cut:
             continue
 
         list_tel_id += [tel_id]
@@ -2924,15 +2899,19 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
         list_line_b += [line_altaz_b]
         list_line_a_err += [line_altaz_a_err]
         list_line_b_err += [line_altaz_b_err]
-        list_line_intensity += [image_size]
+        list_line_intensity += [mask_size]
+        list_line_angle_err += [angle_err]
         list_line_length += [length]
         list_line_width += [width]
+        list_pixel_width += [pixel_width/focal_length]
 
     xing_alt = 0.0
     xing_az = 0.0
     xing_weight = 0.0
     n_tel = len(list_line_a)
-    if len(list_line_a) > 1:
+    if len(list_line_a) < 2:
+        print (f'Less than 2 images for xing method.')
+    else:
         (
             xing_alt,
             xing_az,
@@ -2945,8 +2924,10 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
             list_line_a_err,
             list_line_b_err,
             list_line_intensity,
+            list_line_angle_err,
             list_line_length,
             list_line_width,
+            list_pixel_width,
         )
 
         xing_weight = 1.0 / (xing_err * xing_err)
@@ -2963,10 +2944,14 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
         if xing_off_angle * 180.0 / np.pi > 0.5 and xing_err*180./np.pi<0.3 and len(list_tel_id) >= 2:
             is_bad_result = True
 
-        if len(list_tel_id)<4 or is_bad_result:
+        make_a_plot = False
+        #if xing_off_angle * 180.0 / np.pi <0.05 and xing_err*180./np.pi>1.0:
+        #    make_a_plot = True
+
+        if make_a_plot or is_bad_result:
             print("plot xing reconstruction.")
-            #print (f"xing_off_angle = {xing_off_angle*180./np.pi} deg")
-            #print (f"xing_err = {xing_err*180./np.pi} deg")
+            print (f"xing_off_angle = {xing_off_angle*180./np.pi} deg")
+            print (f"xing_err = {xing_err*180./np.pi} deg")
             #print (f"truth_alt = {truth_alt:0.3f}, xing_alt = {xing_alt:0.3f}")
             #print (f"truth_az = {truth_az:0.3f}, xing_az = {xing_az:0.3f}")
             plot_xing_reconstruction(
@@ -2997,8 +2982,7 @@ def run_multiscopic_analysis(ctapipe_output, telescope_type, run_id, source, eve
             #        0.0,
             #        "movie",
             #    )
-        #if is_bad_result:
-        #    exit()
+            #exit()
 
     return xing_alt, xing_az, xing_weight, n_tel
 
@@ -3008,14 +2992,15 @@ def loop_all_events(training_sample_path, ctapipe_output, telescope_type, save_o
     lookup_table_type = "box3d"
 
     print("loading svd pickle data... ")
-    fast_conversion_type = "image"
-    fast_conversion_poly_pkl = []
-    output_filename = f"{ctapipe_output}/output_machines/{fast_conversion_type}_fast_conversion_arrival_{telescope_type}.pkl"
-    fast_conversion_poly_pkl += [pickle.load(open(output_filename, "rb"))]
-    output_filename = f"{ctapipe_output}/output_machines/{fast_conversion_type}_fast_conversion_impact_{telescope_type}.pkl"
-    fast_conversion_poly_pkl += [pickle.load(open(output_filename, "rb"))]
-    output_filename = f"{ctapipe_output}/output_machines/{fast_conversion_type}_fast_conversion_log_energy_{telescope_type}.pkl"
-    fast_conversion_poly_pkl += [pickle.load(open(output_filename, "rb"))]
+
+    #fast_conversion_type = "image"
+    #fast_conversion_poly_pkl = []
+    #output_filename = f"{ctapipe_output}/output_machines/{fast_conversion_type}_fast_conversion_arrival_{telescope_type}.pkl"
+    #fast_conversion_poly_pkl += [pickle.load(open(output_filename, "rb"))]
+    #output_filename = f"{ctapipe_output}/output_machines/{fast_conversion_type}_fast_conversion_impact_{telescope_type}.pkl"
+    #fast_conversion_poly_pkl += [pickle.load(open(output_filename, "rb"))]
+    #output_filename = f"{ctapipe_output}/output_machines/{fast_conversion_type}_fast_conversion_log_energy_{telescope_type}.pkl"
+    #fast_conversion_poly_pkl += [pickle.load(open(output_filename, "rb"))]
 
     output_filename = f"{ctapipe_output}/output_machines/movie_{lookup_table_type}_lookup_table_{telescope_type}.pkl"
     movie_lookup_table_pkl = pickle.load(open(output_filename, "rb"))
@@ -3082,6 +3067,7 @@ def loop_all_events(training_sample_path, ctapipe_output, telescope_type, save_o
                 continue
 
         print(f"Select telescope type: {telescope_type}")
+        print(f"run_id = {run_id}")
         print(f"event_id = {event_id}")
 
         calib(event)  # fills in r1, dl0, and dl1
@@ -3098,8 +3084,6 @@ def loop_all_events(training_sample_path, ctapipe_output, telescope_type, save_o
         #    continue
 
         average_intensity = reco_result.average_intensity
-        if not save_output:
-            if average_intensity<0.5*plot_image_size_cut: continue
 
         truth_alt = float(event.simulation.shower.alt / u.rad)
         truth_az = float(event.simulation.shower.az / u.rad)
@@ -3197,7 +3181,7 @@ def loop_all_events(training_sample_path, ctapipe_output, telescope_type, save_o
             run_id,
             source,
             event,
-            fast_conversion_poly_pkl,
+            #fast_conversion_poly_pkl,
             movie_lookup_table_pkl,
             movie_eigen_vectors_pkl,
             image_lookup_table_pkl,
