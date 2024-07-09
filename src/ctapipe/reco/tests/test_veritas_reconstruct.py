@@ -13,8 +13,8 @@ ctapipe_input = os.environ.get("CTAPIPE_SVC_PATH")
 
 subprocess.call(f'rm {ctapipe_output}/output_plots/*.png', shell=True)
 
-telescope_type = 'MST_SCT_SCTCam'
-#telescope_type = 'MST_MST_NectarCam'
+#telescope_type = 'MST_SCT_SCTCam'
+telescope_type = 'MST_MST_NectarCam'
 #telescope_type = 'MST_MST_FlashCam'
 #telescope_type = 'SST_1M_DigiCam'
 #telescope_type = 'SST_ASTRI_ASTRICam'
@@ -22,10 +22,10 @@ telescope_type = 'MST_SCT_SCTCam'
 #telescope_type = 'LST_LST_LSTCam'
 
 #sim_files = 'sct_onaxis_train.txt'
-sim_files = 'sct_onaxis_test.txt'
+#sim_files = 'sct_onaxis_test.txt'
 #sim_files = 'sct_diffuse_all.txt'
 #sim_files = 'mst_onaxis_train.txt'
-#sim_files = 'mst_onaxis_test.txt'
+sim_files = 'mst_onaxis_test.txt'
 #sim_files = 'mst_diffuse_all.txt'
 
 with open(f'{ctapipe_input}/{sim_files}', 'r') as file:
@@ -34,8 +34,8 @@ with open(f'{ctapipe_input}/{sim_files}', 'r') as file:
 
         run_id = line.split("_")[3].strip("run")
         print (f"run_id = {run_id}")
-        #if run_id!="897": continue
+        #if int(run_id)<=2000: continue
 
-        loop_all_events(training_sample_path,ctapipe_output,telescope_type,save_output=True)
-        #loop_all_events(training_sample_path,ctapipe_output,telescope_type,save_output=False)
+        #loop_all_events(training_sample_path,ctapipe_output,telescope_type,save_output=True)
+        loop_all_events(training_sample_path,ctapipe_output,telescope_type,save_output=False)
 
