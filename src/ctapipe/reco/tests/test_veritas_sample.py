@@ -12,13 +12,14 @@ ctapipe_input = os.environ.get("CTAPIPE_SVC_PATH")
 
 subprocess.call(f'rm {ctapipe_output}/output_plots/*.png', shell=True)
 
-#telescope_type = 'MST_SCT_SCTCam'
-#telescope_type = 'MST_MST_NectarCam'
-telescope_type = 'MST_MST_FlashCam'
-#telescope_type = 'SST_1M_DigiCam'
-#telescope_type = 'SST_ASTRI_ASTRICam'
-#telescope_type = 'SST_GCT_CHEC'
-#telescope_type = 'LST_LST_LSTCam'
+list_telescope_type = []
+#list_telescope_type += ['MST_SCT_SCTCam']
+list_telescope_type += ['MST_MST_NectarCam']
+list_telescope_type += ['MST_MST_FlashCam']
+list_telescope_type += ['SST_1M_DigiCam']
+list_telescope_type += ['SST_ASTRI_ASTRICam']
+list_telescope_type += ['SST_GCT_CHEC']
+list_telescope_type += ['LST_LST_LSTCam']
 
 #sim_files = 'sct_onaxis_train.txt'
 #sim_files = 'sct_onaxis_test.txt'
@@ -31,5 +32,7 @@ with open(f'{ctapipe_input}/{sim_files}', 'r') as file:
     for line in file:
         training_sample_path = get_dataset_path(line.strip('\n'))
         print (f'training_sample_path = {training_sample_path}')
-        run_save_training_matrix(training_sample_path,telescope_type,ctapipe_output)
+        for tel in range(0,len(list_telescope_type)):
+            telescope_type = list_telescope_type[tel]
+            run_save_training_matrix(training_sample_path,telescope_type,ctapipe_output)
 

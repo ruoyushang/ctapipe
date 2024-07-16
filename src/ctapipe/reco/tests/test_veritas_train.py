@@ -14,9 +14,9 @@ ctapipe_input = os.environ.get("CTAPIPE_SVC_PATH")
 
 subprocess.call(f'rm {ctapipe_output}/output_plots/*.png', shell=True)
 
-#telescope_type = 'MST_SCT_SCTCam'
+telescope_type = 'MST_SCT_SCTCam'
 #telescope_type = 'MST_MST_NectarCam'
-telescope_type = 'MST_MST_FlashCam'
+#telescope_type = 'MST_MST_FlashCam'
 #telescope_type = 'SST_1M_DigiCam'
 #telescope_type = 'SST_ASTRI_ASTRICam'
 #telescope_type = 'SST_GCT_CHEC'
