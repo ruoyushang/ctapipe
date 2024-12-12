@@ -11,10 +11,10 @@ print(f"ctapipe_output = {ctapipe_output}")
 
 
 # array_type = 'SCT'
-array_type = "Nectar"
+#array_type = "Nectar"
 #array_type = 'Flash'
 #array_type = 'LST'
-#array_type = 'ASTRI'
+array_type = 'ASTRI'
 #array_type = 'CHEC'
 #array_type = 'Digi'
 #array_type = 'LST_Nectar_ASTRI'
@@ -36,11 +36,11 @@ image_size_bins += [0.0]
 image_size_bins += [1e10]
 
 truth_energy_bins = []
-truth_energy_bins += [0.0]
-#truth_energy_bins += [200.0]
-#truth_energy_bins += [800.0]
-#truth_energy_bins += [3200.0]
-truth_energy_bins += [1e10]
+#truth_energy_bins += [0.05]
+truth_energy_bins += [0.2]
+truth_energy_bins += [0.8]
+truth_energy_bins += [3.2]
+truth_energy_bins += [100.]
 
 error_limit = 1.0
 
@@ -235,9 +235,9 @@ def find_best_unc_cut(combine_sample_path):
                 default_src_loc_err = analysis_result[evt][0]
                 default_src_loc_unc = analysis_result[evt][1]
                 truth_energy_tev = analysis_result[evt][2]
-                if truth_energy_tev * 1000.0 <= truth_energy_bins[b]:
+                if truth_energy_tev <= truth_energy_bins[b]:
                     continue
-                if truth_energy_tev * 1000.0 > truth_energy_bins[b + 1]:
+                if truth_energy_tev > truth_energy_bins[b + 1]:
                     continue
                 if default_src_loc_err > error_limit:
                     continue
@@ -259,9 +259,9 @@ def find_best_unc_cut(combine_sample_path):
                     new_src_loc_err = analysis_result[evt][0]
                     new_src_loc_unc = analysis_result[evt][1]
                     truth_energy_tev = analysis_result[evt][2]
-                    if truth_energy_tev * 1000.0 <= truth_energy_bins[b]:
+                    if truth_energy_tev <= truth_energy_bins[b]:
                         continue
-                    if truth_energy_tev * 1000.0 > truth_energy_bins[b + 1]:
+                    if truth_energy_tev > truth_energy_bins[b + 1]:
                         continue
                     if new_src_loc_err > error_limit:
                         continue
@@ -308,9 +308,9 @@ for b in range(0, len(truth_energy_bins) - 1):
                 default_src_loc_err = analysis_result[evt][0]
                 default_src_loc_unc = analysis_result[evt][1]
                 truth_energy_tev = analysis_result[evt][2]
-                if truth_energy_tev * 1000.0 <= truth_energy_bins[b]:
+                if truth_energy_tev <= truth_energy_bins[b]:
                     continue
-                if truth_energy_tev * 1000.0 > truth_energy_bins[b + 1]:
+                if truth_energy_tev > truth_energy_bins[b + 1]:
                     continue
                 if default_src_loc_err>max(1.0,error_limit):
                     continue
@@ -329,9 +329,9 @@ for b in range(0, len(truth_energy_bins) - 1):
                 new_src_loc_err = analysis_result[evt][0]
                 new_src_loc_unc = analysis_result[evt][1]
                 truth_energy_tev = analysis_result[evt][2]
-                if truth_energy_tev * 1000.0 <= truth_energy_bins[b]:
+                if truth_energy_tev <= truth_energy_bins[b]:
                     continue
-                if truth_energy_tev * 1000.0 > truth_energy_bins[b + 1]:
+                if truth_energy_tev > truth_energy_bins[b + 1]:
                     continue
                 if new_src_loc_err>max(1.0,error_limit):
                     continue
@@ -371,39 +371,26 @@ for b in range(0, len(truth_energy_bins) - 1):
     label_y = "count"
     ax.set_xlabel(label_x)
     ax.set_ylabel(label_y)
+    PSF_default = compute_angular_resolution(list_default_src_loc_err)
+    PSF_new = compute_angular_resolution(list_new_src_loc_err)
+    print(f"PSF_default = {PSF_default:0.4f} deg")
+    print(f"PSF_new = {PSF_new:0.4f} deg")
     hist_default = ax.hist(
         list_default_src_loc_err,
         bins=50,
         range=[0.0, 1.0],
         alpha=0.5,
-        label="default method",
+        label=f"default tailcut (PSF = {PSF_default:0.2f} deg)",
     )
     hist_new = ax.hist(
         list_new_src_loc_err,
         bins=50,
         range=[0.0, 1.0],
         alpha=0.5,
-        label="least-square method",
+        label=f"denoising + tailcut (PSF = {PSF_new:0.2f} deg)",
     )
-    PSF_default = compute_angular_resolution(list_default_src_loc_err)
-    PSF_new = compute_angular_resolution(list_new_src_loc_err)
-    #Sum_default = np.sum(hist_default[0])
-    #PSF_default = 0.0
-    #for entry in range(0, len(hist_default[0])):
-    #    X = hist_default[1][entry]
-    #    f = hist_default[0][entry] / Sum_default
-    #    PSF_default += X * X * f
-    #PSF_default = pow(PSF_default, 0.5)
-    #Sum_new = np.sum(hist_new[0])
-    #PSF_new = 0.0
-    #for entry in range(0, len(hist_new[0])):
-    #    X = hist_new[1][entry]
-    #    f = hist_new[0][entry] / Sum_new
-    #    PSF_new += X * X * f
-    #PSF_new = pow(PSF_new, 0.5)
-    print(f"PSF_default = {PSF_default:0.4f} deg")
-    print(f"PSF_new = {PSF_new:0.4f} deg")
     ax.legend(loc="best")
+    ax.set_title(f"{truth_energy_bins[b]}-{truth_energy_bins[b+1]} TeV")
     fig.savefig(
         f"{ctapipe_output}/output_plots/angular_error_dist_{ana_tag}_energy{b}.png",
         bbox_inches="tight",

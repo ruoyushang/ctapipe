@@ -21,7 +21,7 @@ from ctapipe.image import (
 )
 from ctapipe.image.toymodel import Gaussian
 from ctapipe.instrument import CameraGeometry
-from ctapipe.io import SimTelEventSource
+from ctapipe.io import SimTelEventSource, EventSource
 from ctapipe.utils.datasets import get_dataset_path
 from ctapipe.visualization import CameraDisplay
 from ctapipe.reco import ShowerProcessor
@@ -31,26 +31,27 @@ ctapipe_output = os.environ.get("CTAPIPE_OUTPUT_PATH")
 
 #train_model = True
 train_model = False
-toy_test = True
-#toy_test = False
-#sim_test = True
-sim_test = False
+#toy_test = True
+toy_test = False
+sim_test = True
+#sim_test = False
 
 #array_type = 'LSTCam'
-array_type = "NectarCam"
+#array_type = "NectarCam"
 #array_type = 'FlashCam'
 #array_type = 'DigiCam'
-#array_type = 'ASTRICam'
+array_type = 'ASTRICam'
 #array_type = 'CHEC'
 #array_type = 'SCTCam'
 
 #pointing = "proton"
 pointing = "onaxis"
-# pointing = 'diffuse'
+#pointing = 'diffuse'
 
-select_evt = []
+select_evt = None
 # run_id, event_id = 402, 21104 # good example
-#run_id, event_id = 402, 359703
+#run_id = 402
+#event_id = 24606
 #select_evt = [run_id, event_id]
 
 ana_tag = f"psi_unc_{array_type}_{pointing}"
@@ -109,6 +110,7 @@ def loop_all_events(
 ):
     print(f"loading file: {training_sample_path}")
     source = SimTelEventSource(training_sample_path, focal_length_choice="EQUIVALENT")
+    #source = EventSource(training_sample_path, focal_length_choice="EQUIVALENT")
 
     list_tel_id = []
     for tel_idx in range(0, source.subarray.n_tels):
@@ -132,6 +134,11 @@ def loop_all_events(
     ob_keys = source.observation_blocks.keys()
     run_id = list(ob_keys)[0]
 
+    if not select_evt == None:
+        select_run_id = select_evt[0]
+        if run_id != select_run_id:
+            return
+
     tel_pointing_alt = float(
         source.observation_blocks[run_id].subarray_pointing_lat / u.rad
     )
@@ -144,15 +151,22 @@ def loop_all_events(
     for event in source:
         event_id = event.index["event_id"]
 
+        if not select_evt == None:
+            select_event_id = select_evt[1]
+            if event_id != select_event_id:
+                continue
+
         truth_alt = float(event.simulation.shower.alt / u.rad)
         truth_az = float(event.simulation.shower.az / u.rad)
         truth_energy = float(event.simulation.shower.energy / u.TeV)
 
-        #if truth_energy<0.1: continue
+        #if truth_energy<1.0: continue
 
         calib(event)  # fills in r1, dl0, and dl1
         image_processor(event)
         shower_processor(event)
+
+        #print (f"event.trigger.tels_with_trigger = {event.trigger.tels_with_trigger}") 
 
         for tel_idx in range(0, len(list(event.dl0.tel.keys()))):
             tel_id = list(event.dl0.tel.keys())[tel_idx]
@@ -165,6 +179,12 @@ def loop_all_events(
             focal_length = float(
                 source.subarray.tel[tel_id].optics.equivalent_focal_length / u.m
             )
+
+            truth_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
+            #print (f"event.simulation.tel[tel_id] = {event.simulation.tel[tel_id]}")
+            if array_type == 'SCTCam':
+                for pix in range(0, len(truth_image_1d)):
+                    truth_image_1d[pix] = event.simulation.tel[tel_id].true_image[pix]
 
             noisy_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
             for pix in range(0, len(noisy_image_1d)):
@@ -182,11 +202,18 @@ def loop_all_events(
                 picture_significance,
                 min_neighbors_significance,
             )
-            if init_image_mean/night_sky_rms>5.: continue
+
+            #if init_image_mean/night_sky_rms<1.: continue
+            #if init_image_mean/night_sky_rms>10.: continue
 
 
             tailcut_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            tailcut_image_mask = cleaning_image(geometry,noisy_image_1d,tailcut_image_1d)
+            tailcut_image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(
+                geometry,
+                noisy_image_1d,
+                tailcut_image_1d, 
+                original_count=False,
+            )
 
             denoiser_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
             denoiser_image_mask = denoising_image(
@@ -194,20 +221,20 @@ def loop_all_events(
                 geometry,
                 noisy_image_1d,
                 denoiser_image_1d,
-                check_hallucination=False,
+                apply_tailcut=False,
             )
 
             clean_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            image_mask, interm_Ys = univ_inv_sol(
+            universal_image_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
                 denoiser_model_pkl,
                 geometry,
                 noisy_image_1d,
                 clean_image_1d,
-                h0 = 0.2,
                 freq = 1,
             )
+            image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
 
-            if np.sum(clean_image_1d)<10.: continue
+            if image_snr<1.5: continue
 
             pix_width = float(geometry.pixel_width.to_value(u.m)[0])
 
@@ -228,70 +255,88 @@ def loop_all_events(
             if np.isnan(psi_uncertainty):
                 continue
 
-            if length / pix_width < 2.:
-                continue
+            #if length / pix_width < 2.:
+            #    continue
+            #if len(interm_Ys)<2:
+            #    continue
 
             print ("making plot...")
 
-            #middle_step = min(int(0.5*float(len(interm_Ys))),len(interm_Ys)-1)
-            #values = [noisy_image_1d, interm_Ys[middle_step], interm_Ys[len(interm_Ys)-1]]
-            ##values = [noisy_image_1d, interm_Ys[middle_step], clean_image_1d]
-            #titles = ["noisy image", f"t={middle_step} step", f"t={len(interm_Ys)} step"]
-            #fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
-            #for ax1, trials1, title1 in zip(axs, values, titles):
-            #    display = CameraDisplay(geometry, ax=ax1)
-            #    display.image = trials1
-            #    display.cmap = "Reds"
-            #    ax1.set_title(title1)
-            #fig.savefig(
-            #    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_universal.png", 
-            #    dpi=300,
-            #    bbox_inches="tight",
-            #)
-            #del fig
-            #del axs
-            #plt.close()
-
-            #values = [noisy_image_1d, tailcut_image_1d, denoiser_image_1d]
-            #titles = ["noisy image", "tailcut", "original denoiser"]
-            #fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
-            #for ax1, trials1, title1 in zip(axs, values, titles):
-            #    display = CameraDisplay(geometry, ax=ax1)
-            #    display.image = trials1
-            #    display.cmap = "Reds"
-            #    ax1.set_title(title1)
-            #fig.savefig(
-            #    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_original.png", 
-            #    dpi=300,
-            #    bbox_inches="tight",
-            #)
-            #del fig
-            #del axs
-            #plt.close()
-
-            middle_step_1 = min(int(0.3*float(len(interm_Ys))),len(interm_Ys)-1)
-            middle_step_2 = min(int(0.6*float(len(interm_Ys))),len(interm_Ys)-1)
+            middle_step_1 = min(int(0.2*float(len(interm_Ys))),len(interm_Ys)-1)
+            middle_step_2 = min(int(0.4*float(len(interm_Ys))),len(interm_Ys)-1)
+            middle_step_3 = min(int(0.6*float(len(interm_Ys))),len(interm_Ys)-1)
+            middle_step_4 = min(int(0.8*float(len(interm_Ys))),len(interm_Ys)-1)
             values = []
             titles = []
-            values += [[noisy_image_1d, tailcut_image_1d, denoiser_image_1d]]
-            titles += [["noisy image", "tailcut on original image", "original denoiser"]]
-            values += [[interm_Ys[1], interm_Ys[len(interm_Ys)-1], clean_image_1d]]
-            titles += [[f"t=1 step", f"t={len(interm_Ys)} step", "tailcut on denoised image"]]
+            values += [[noisy_image_1d, interm_Ys[middle_step_1], interm_Ys[middle_step_2]]]
+            titles += [["noisy image", f"t={middle_step_1} step", f"t={middle_step_2} step"]]
+            values += [[interm_Ys[middle_step_3], interm_Ys[middle_step_4], interm_Ys[len(interm_Ys)-1]]]
+            titles += [[f"t={middle_step_3} step", f"t={middle_step_4} step", f"t={len(interm_Ys)-1} step"]]
             fig, axs = plt.subplots(2, 3, figsize=(3.0 * 6.4, 2.0 * 4.8))
             for ax1, trials1, title1 in zip(axs, values, titles):
                 for ax2, trials2, title2 in zip(ax1, trials1, title1):
+                    if len(trials2)==0: continue
                     display = CameraDisplay(geometry, ax=ax2)
                     display.image = trials2
                     display.cmap = "Reds"
                     ax2.set_title(title2)
             fig.savefig(
-                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}.png", 
+                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_iteration.png", 
                 dpi=300,
                 bbox_inches="tight",
             )
             del fig
             del axs
             plt.close()
+
+            values = []
+            titles = []
+            values += [noisy_image_1d, denoiser_image_1d]
+            titles += ["noisy image", "denoised image"]
+            fig, axs = plt.subplots(1, 2, figsize=(2.0 * 6.4, 1.0 * 4.8))
+            for ax1, trials1, title1 in zip(axs, values, titles):
+                display = CameraDisplay(geometry, ax=ax1)
+                display.image = trials1
+                display.cmap = "Reds"
+                ax1.set_title(title1)
+            fig.savefig(
+                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_original.png", 
+                dpi=300,
+                bbox_inches="tight",
+            )
+            del fig
+            del axs
+            plt.close()
+
+            values = []
+            titles = []
+            masks = []
+            if array_type == 'SCTCam':
+                values += [truth_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
+                titles += ["truth image", "original denoiser", "universal denoiser"]
+                masks += [tailcut_image_mask, universal_image_mask, universal_image_mask]
+            else:
+                values += [noisy_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
+                titles += ["noisy image", "original denoiser", "universal denoiser"]
+                masks += [tailcut_image_mask, denoiser_image_mask, universal_image_mask]
+            fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+            for ax1, trials1, masks1, title1 in zip(axs, values, masks, titles):
+                display = CameraDisplay(geometry, ax=ax1)
+                display.image = trials1
+                display.cmap = "Reds"
+                ax1.set_title(title1)
+                display.highlight_pixels(
+                    masks1, color="xkcd:green", linewidth=0.5, alpha=1.0
+                )
+            fig.savefig(
+                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_universal.png", 
+                dpi=300,
+                bbox_inches="tight",
+            )
+            del fig
+            del axs
+            plt.close()
+
 
 
 class CustomMSELoss(nn.Module):
@@ -375,22 +420,21 @@ class DenoisingAutoencoder(nn.Module):
 
 
 def sample_with_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sigma=0.0):
+
     pix_area = float(cam.pix_area.to_value(u.m**2)[0])
     pix_width = 0.5 * float(cam.pixel_width.to_value(u.m)[0])
 
     if length > 0.0:
-        true_length = length * u.m
+        true_length = length * pix_width * u.m
     else:
-        # true_length = np.random.uniform(low=3.0, high=12., size=None) * pix_width * u.m
-        #true_length = 30.0 * pix_width * u.m
         true_length = 20.0 * pix_width * u.m
     if width > 0.0:
-        true_width = width * u.m
+        true_width = width * pix_width * u.m
     else:
-        true_width = 2.0 * pix_width * u.m
+        true_width = 1.0 * pix_width * u.m
     if image_intensity_sigma == 0.0:
         image_intensity = (
-            np.random.uniform(low=10.0, high=50.0, size=None)
+            np.random.uniform(low=10.0, high=20.0, size=None)
             * nsb_level_pe
             * (true_length.to_value(u.m) * true_width.to_value(u.m) / pix_area)
         )
@@ -402,18 +446,15 @@ def sample_with_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sig
         )
     true_psi = np.random.uniform(low=0.0, high=360.0, size=None) * u.deg
     true_x = (
-        np.random.uniform(low=-0.9 * pix_x_max, high=0.9 * pix_x_max, size=None) * u.m
+        np.random.uniform(low=-0.7 * pix_x_max, high=0.7 * pix_x_max, size=None) * u.m
     )
     true_y = (
-        np.random.uniform(low=-0.9 * pix_y_max, high=0.9 * pix_y_max, size=None) * u.m
+        np.random.uniform(low=-0.7 * pix_y_max, high=0.7 * pix_y_max, size=None) * u.m
     )
 
     model = Gaussian(true_x, true_y, true_length, true_width, true_psi)
-    noisy_image, _, _ = model.generate_image(
+    noisy_image, clean_image, _ = model.generate_image(
         cam, intensity=image_intensity, nsb_level_pe=nsb_level_pe, rng=rng
-    )
-    clean_image, _, _ = model.generate_image(
-        cam, intensity=image_intensity, nsb_level_pe=0.0, rng=rng
     )
 
     return [noisy_image, clean_image]
@@ -517,15 +558,16 @@ if not os.path.exists(output_filename):
     print(f"{output_filename} does not exist.")
     exit()
 else:
+    print (f"read {output_filename}...")
     denoiser_model_pkl = pickle.load(open(output_filename, "rb"))
 
 
 if toy_test:
     test_images = [
-        # sample_with_noise(nsb_level_pe=nsb_level_pe,length=0.3,width=0.05,image_intensity_sigma=5.) for _ in tqdm(range(10))
-        sample_with_noise(nsb_level_pe=nsb_level_pe,image_intensity_sigma=10.)
+        sample_with_noise(nsb_level_pe=nsb_level_pe)
+        #sample_with_noise(nsb_level_pe=0.5*nsb_level_pe,image_intensity_sigma=10.)
         #sample_with_noise(nsb_level_pe=nsb_level_pe,image_intensity_sigma=15.)
-        #sample_with_noise(nsb_level_pe=nsb_level_pe,image_intensity_sigma=20.)
+        #sample_with_noise(nsb_level_pe=nsb_level_pe,length=12.,width=2.,image_intensity_sigma=20.)
         for _ in tqdm(range(10))
     ]
 
@@ -533,37 +575,41 @@ if toy_test:
         noisy_signal = test_images[trial][0]
         truth_signal = test_images[trial][1]
 
-        clean_signal = np.zeros_like(noisy_signal)
-        clean_mask = cleaning_image(cam, noisy_signal, clean_signal, original_count=True)
+        tailcut_signal = np.zeros_like(noisy_signal)
+        tailcut_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(cam, noisy_signal, tailcut_signal, original_count=False)
 
         denoising_signal = np.zeros_like(noisy_signal)
         denoising_mask = denoising_image(
-            denoiser_model_pkl, cam, noisy_signal, denoising_signal, check_hallucination=False
+            denoiser_model_pkl, 
+            cam, 
+            noisy_signal, 
+            denoising_signal, 
+            apply_tailcut=False,
         )
 
         mask_correlation = 0.0
         mask_correlation_norm = 0.0
-        for pix in range(0, len(clean_mask)):
-            if denoising_mask[pix] and clean_mask[pix]:
+        for pix in range(0, len(tailcut_mask)):
+            if denoising_mask[pix] and tailcut_mask[pix]:
                 mask_correlation += 1.0
-            if denoising_mask[pix] or clean_mask[pix]:
+            if denoising_mask[pix] or tailcut_mask[pix]:
                 mask_correlation_norm += 1.0
         print(f"mask_correlation = {mask_correlation}")
 
         univ_inv_sol_image = np.zeros_like(noisy_signal)
-        univ_inv_sol_mask, interm_Ys = univ_inv_sol(
+        univ_inv_sol_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
                denoiser_model_pkl,
                cam,
                noisy_signal,
                univ_inv_sol_image,
-               h0 = 0.2,
                freq = 1
         )
+        image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
 
         middle_step = int(0.5*float(len(interm_Ys)))+1
         values = []
         titles = []
-        values += [[noisy_signal, truth_signal, clean_signal]]
+        values += [[noisy_signal, truth_signal, tailcut_signal]]
         titles += [["noisy image", "truth image", "tailcut on original image"]]
         values += [[interm_Ys[1], interm_Ys[len(interm_Ys)-1], univ_inv_sol_image]]
         titles += [["t=1 step", f"t={len(interm_Ys)-1} step", "tailcut on denoised image"]]
@@ -575,13 +621,34 @@ if toy_test:
                 display.cmap = "Reds"
                 ax2.set_title(title2)
         fig.savefig(
-            f"{ctapipe_output}/output_plots/image_trial_{trial}_universal.png", 
+            f"{ctapipe_output}/output_plots/image_trial_{trial}_universal_vs_tailcut.png", 
             dpi=300,
             bbox_inches="tight",
         )
         del fig
         del axs
         plt.close()
+
+        middle_step = int(0.5*float(len(interm_Ys)))+1
+        values = []
+        titles = []
+        values += [noisy_signal, truth_signal, denoising_signal]
+        titles += ["noisy image", "truth image", "denoised image"]
+        fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+        for ax1, trials1, title1 in zip(axs, values, titles):
+            display = CameraDisplay(cam, ax=ax1)
+            display.image = trials1
+            display.cmap = "Reds"
+            ax1.set_title(title1)
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/image_trial_{trial}_universal_vs_original.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del axs
+        plt.close()
+
 
 if sim_test:
     sim_files = None

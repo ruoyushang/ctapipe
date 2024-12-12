@@ -48,8 +48,8 @@ make_plot = False
 ana_tag = f"psi_unc_{array_type}_{pointing}"
 
 select_evt = None
-#run_id = 401
-#event_id = 104
+#run_id = 402
+#event_id = 600
 #select_evt = [run_id, event_id]
 
 telescope_type = []
@@ -100,6 +100,9 @@ if not os.path.exists(output_filename):
 else:
     denoiser_model_pkl = pickle.load(open(output_filename, "rb"))
 
+def sigmoid(x):
+  return 1 / (1 + np.exp(-x))
+
 def source_location_chi2(
     input_xy,
     list_img_size,
@@ -144,12 +147,11 @@ def source_location_chi2(
         rotat_try_x = 1.0 * rotat_coord[0]
         rotat_try_y = -1.0 * rotat_coord[1]
 
-        unc_minor = pow(
-            pow(rotat_try_y * list_img_unc_angle[img], 2)
-            + pow(list_img_ry_unc[img], 2),
-            0.5,
-        )
-        # unc_minor = rotat_try_y * list_img_unc_angle[img]
+        unc_minor = pow(rotat_try_y * list_img_unc_angle[img], 2) 
+        unc_minor += pow(list_img_ry_unc[img], 2)
+        unc_minor = pow(unc_minor,0.5)
+        #unc_minor = rotat_try_y * list_img_unc_angle[img]
+        #unc_minor += pow(2.*list_img_length[img] * (sigmoid(list_img_length[img]/abs(rotat_try_y))-0.5), 2)
 
         # weight = list_img_size[img] * list_img_length[img] / list_img_width[img]
         # chi2_default += weight * pow(rotat_try_x,2)
@@ -502,6 +504,7 @@ def plot_monoscopic_reconstruction(
     star_az,
     clean_image,
     mask_image,
+    img_snr,
     img_size,
     img_length,
     img_width,
@@ -591,7 +594,7 @@ def plot_monoscopic_reconstruction(
 
     titles = []
     titles += ["noisy image"]
-    titles += [f"cleaned image (size = {int(img_size)}, length = {img_length:0.2f}, width = {img_width:0.2f})"]
+    titles += [f"cleaned image (SNR = {img_snr:0.2f}, length/width = {img_length/img_width:0.2f})"]
 
     # fig, axs = plt.subplots(1, 2, constrained_layout=True, sharex=True)
     fig, axs = plt.subplots(1, 2, figsize=(2.0 * 8.6, 6.4))
@@ -769,6 +772,7 @@ def loop_all_events(
         list_img_psi_unc = []
         list_img_ry_unc = []
         list_img_frac_leakage = []
+        list_img_snr = []
         list_truth_psi = []
 
         for tel_idx in range(0, len(list(event.dl0.tel.keys()))):
@@ -785,28 +789,44 @@ def loop_all_events(
             )
 
             init_clean_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            init_image_mask = cleaning_image(geometry,event.dl1.tel[tel_id].image,init_clean_image_1d)
+            init_image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(geometry,event.dl1.tel[tel_id].image,init_clean_image_1d,original_count=False)
             init_image_size = np.sum(init_clean_image_1d)
 
+            n_init_mask_pixels = 0
+            for pix in range(0,len(init_image_mask)):
+                if init_image_mask[pix]:
+                    n_init_mask_pixels += 1
+
             clean_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
+            #image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(
+            #    geometry,
+            #    event.dl1.tel[tel_id].image,
+            #    clean_image_1d,
+            #    original_count=False,
+            #)
             #image_mask = denoising_image(
             #    denoiser_model_pkl[cam_type],
             #    geometry,
             #    event.dl1.tel[tel_id].image,
             #    clean_image_1d,
             #)
-            image_mask, interm_Ys = univ_inv_sol(
+            image_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
                 denoiser_model_pkl,
                 geometry,
                 event.dl1.tel[tel_id].image,
                 clean_image_1d,
-                h0 = 0.2,
-                freq = 10
+                freq = 10,
             )
+            image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
 
             image_size = np.sum(clean_image_1d)
             if image_size == 0.0:
                 continue
+
+            n_mask_pixels = 0
+            for pix in range(0,len(image_mask)):
+                if image_mask[pix]:
+                    n_mask_pixels += 1
 
             border_pixels = geometry.get_border_pixel_mask(1)
             border_mask = border_pixels & image_mask
@@ -879,34 +899,43 @@ def loop_all_events(
                 source, run_id, tel_id, cog_x, cog_y
             )
 
-            if init_image_size < 20.0:
+
+            if image_snr < 1.2:
                 continue
+            #if init_image_size < 20.0:
+            #    continue
             #if psi_uncertainty > 30.0 * np.pi / 180.0:
             #    continue
             #if intensity < 10.0:
             #    continue
             if width == 0.0:
                 continue
-            if length / width < 1.5:
+            if length / width < 1.3:
                 continue
+            #if n_init_mask_pixels<5: 
+            #    continue
+            #if float(n_mask_pixels)/float(len(image_mask))>0.5: 
+            #    continue
+
 
             n_islands = number_of_islands(geometry, image_mask)
 
             list_tel_id += [tel_id]
             list_clean_image += [clean_image_1d]
             list_mask += [image_mask]
+            list_img_snr += [image_snr]
             list_img_size += [intensity]
             list_img_islands += [n_islands[0]]
-            list_img_length += [length]
-            list_img_width += [width]
+            list_img_length += [length/focal_length]
+            list_img_width += [width/focal_length]
             list_img_cen_x += [cog_nom_x]
             list_img_cen_y += [cog_nom_y]
             list_img_psi += [psi]
             list_img_psi_unc += [psi_uncertainty]
-            #list_img_ry_unc += [
-            #    max(0.5*pix_width, transverse_cog_uncertainty) / focal_length
-            #]
-            list_img_ry_unc += [transverse_cog_uncertainty/focal_length]
+            list_img_ry_unc += [
+                max(0.5*pix_width, transverse_cog_uncertainty) / focal_length
+            ]
+            #list_img_ry_unc += [transverse_cog_uncertainty/focal_length]
             list_img_frac_leakage += [frac_leakage_intensity]
             list_truth_psi += [truth_psi]
 
@@ -1062,16 +1091,18 @@ def loop_all_events(
                     [list_img_frac_leakage[tel]],
                 )
                 src_chi = pow(src_chi2, 0.5)
-                #if list_img_size[tel] < 2000.0:
+                #if src_chi < 4.0:
                 #    continue
-                #if src_chi < 3.0:
+                #if list_img_size[tel] < 2000.0:
                 #    continue
                 #if list_img_islands[tel]<2:
                 #    continue
-                if not default_location_err_deg<0.3*location_err_deg:
+                if not default_location_err_deg<0.1*location_err_deg:
                     continue
-                print("making a plot...")
+                #if location_err_deg/location_unc_deg<5.0:
+                #    continue
 
+                print("making a plot...")
                 plot_monoscopic_reconstruction(
                     ctapipe_output,
                     source,
@@ -1082,6 +1113,7 @@ def loop_all_events(
                     truth_az,
                     list_clean_image[tel],
                     list_mask[tel],
+                    list_img_snr[tel],
                     list_img_size[tel],
                     list_img_length[tel],
                     list_img_width[tel],
@@ -1092,12 +1124,11 @@ def loop_all_events(
                     list_img_ry_unc[tel],
                     list_img_frac_leakage[tel],
                 )
-            #exit()
 
         if not select_evt == None:
             exit()
 
-        if not make_plot:
+        if save_output:
             output_filename = (
                 f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_mono.pkl"
             )

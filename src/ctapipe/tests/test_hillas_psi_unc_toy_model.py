@@ -4,7 +4,7 @@ import pickle
 import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
-from common_tools import cleaning_image, denoising_image, univ_inv_sol
+from common_tools import cleaning_image, denoising_image, univ_inv_sol, cleaning_level_significance_default
 from scipy.stats import norm
 from tqdm.auto import tqdm
 
@@ -19,8 +19,13 @@ ctapipe_output = os.environ.get("CTAPIPE_OUTPUT_PATH")
 
 rng = np.random.default_rng(0)
 
-# cam_type = "LSTCam"
-cam_type = "NectarCam"
+cam_type = 'LSTCam'
+#cam_type = "NectarCam"
+#cam_type = 'FlashCam'
+#cam_type = 'DigiCam'
+#cam_type = 'ASTRICam'
+#cam_type = 'CHEC'
+#cam_type = 'SCTCam'
 
 cam = CameraGeometry.from_name(cam_type)
 pix_area = float(cam.pix_area.to_value(u.m**2)[0])
@@ -30,7 +35,7 @@ true_width = 2.0 * pix_width * u.m
 true_length = 6.0 * true_width
 # true_width = 0.05 * u.m
 # true_length = 0.3 * u.m
-true_psi = 0.0 * u.deg
+true_psi = 45.0 * u.deg
 #true_x = 0.5 * u.m
 #true_y = -0.2 * u.m
 true_x = 0. * u.m
@@ -39,7 +44,7 @@ true_y = 0. * u.m
 # test_nsb_level_pe = 3
 test_nsb_level_pe = 5
 
-image_intensity_sigma = 50.0
+image_intensity_sigma = 20.0
 image_intensity = (
     image_intensity_sigma
     * test_nsb_level_pe
@@ -52,33 +57,14 @@ n_sample = 1000
 model = Gaussian(true_x, true_y, true_length, true_width, true_psi)
 
 
-output_filename = f"{ctapipe_output}/output_machines/denoiser_model_{cam_type}.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_{cam_type}.pkl"
+output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
 denoiser_model_pkl = None
 if not os.path.exists(output_filename):
     print(f"{output_filename} does not exist.")
     exit()
 else:
     denoiser_model_pkl = pickle.load(open(output_filename, "rb"))
-
-cleaning_level = {
-    "DigiCam": (2, 4, 2),
-    "ASTRICam": (2, 4, 2),
-    "CHEC": (2, 4, 2),
-    "LSTCam": (4, 8, 2),
-    "FlashCam": (4, 8, 2),
-    "NectarCam": (2, 4, 2),
-    "SCTCam": (3, 6, 2),
-}
-cleaning_level_significance_default = (3, 4, 2)
-cleaning_level_significance = {
-    "DigiCam": cleaning_level_significance_default,
-    "ASTRICam": cleaning_level_significance_default,
-    "CHEC": cleaning_level_significance_default,
-    "LSTCam": cleaning_level_significance_default,
-    "FlashCam": cleaning_level_significance_default,
-    "NectarCam": cleaning_level_significance_default,
-    "SCTCam": cleaning_level_significance_default,
-}
 
 
 def sample_no_noise_no_cleaning():
@@ -99,7 +85,7 @@ def sample_noise_with_cleaning_original():
     )
 
     image_clean = np.zeros_like(image)
-    image_mask = cleaning_image(cam, image, image_clean, original_count=True)
+    image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(cam, image, image_clean, original_count=True)
 
     if np.sum(image_clean) <= 0.0:
         return None
@@ -114,7 +100,7 @@ def sample_noise_with_cleaning(tag):
     )
 
     image_clean = np.zeros_like(image)
-    image_mask = cleaning_image(cam, image, image_clean, original_count=False)
+    image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(cam, image, image_clean, original_count=False)
 
     if np.sum(image_clean) <= 0.0:
         return None
@@ -179,12 +165,11 @@ def sample_noise_with_universal_denoising(tag):
     )
 
     denoising_signal = np.zeros_like(image)
-    denoising_mask, interm_Ys = univ_inv_sol(
+    denoising_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
         denoiser_model_pkl,
         cam,
         image,
         denoising_signal,
-        h0 = 0.2,
         freq = 1
     )
 
@@ -254,23 +239,20 @@ for trial in tqdm(range(n_sample)):
         continue
     trials_noise_denoising += [h]
 
+boundary_significance = cleaning_level_significance_default[0] 
+picture_significance = cleaning_level_significance_default[1]
+
 titles = [
     "No Noise, all Pixels",
-    f"With Noise ({test_nsb_level_pe} p.e.), Tailcuts({test_nsb_level_pe*3}, {test_nsb_level_pe*2}), counting orignal p.e.",
-    f"With Noise ({test_nsb_level_pe} p.e.), Tailcuts({test_nsb_level_pe*3}, {test_nsb_level_pe*2}), p.e. above NSB",
-    f"With Noise ({test_nsb_level_pe} p.e.), Denoising, Tailcuts(2, 1), p.e. above NSB",
+    f"With Noise ({test_nsb_level_pe} p.e.), Tailcuts({picture_significance}$\sigma$, {boundary_significance}$\sigma$), counting orignal p.e.",
+    f"With Noise ({test_nsb_level_pe} p.e.), Tailcuts({picture_significance}$\sigma$, {boundary_significance}$\sigma$), p.e. above {boundary_significance}$\sigma$",
 ]
 values = [
     trials_no_noise_no_cleaning,
     trials_noise_cleaning_original,
     trials_noise_cleaning,
-    trials_noise_denoising,
 ]
-
-for trials in values:
-    print(f"len(trials) = {len(trials)}")
-
-fig, axs = plt.subplots(4, 1, constrained_layout=True, sharex=True)
+fig, axs = plt.subplots(3, 1, constrained_layout=True, sharex=True)
 for ax, trials, title in zip(axs, values, titles):
     pred = np.array([t.psi.to_value(u.deg) - true_psi.to_value(u.deg) for t in trials])
     unc = np.array([t.psi_uncertainty.to_value(u.deg) for t in trials])
@@ -281,4 +263,27 @@ for ax, trials, title in zip(axs, values, titles):
     ax.plot(x, norm.pdf(x, 0.0, unc.mean()))
     ax.set_title(title)
 axs[len(axs) - 1].set_xlabel("Psi / deg")
-fig.savefig(f"{ctapipe_output}/output_plots/hillas_uncertainties.png", dpi=300)
+fig.savefig(f"{ctapipe_output}/output_plots/hillas_uncertainties_original.png", dpi=300)
+
+titles = [
+    "No Noise, all Pixels",
+    f"With Noise ({test_nsb_level_pe} p.e.), Tailcuts({picture_significance}$\sigma$, {boundary_significance}$\sigma$), p.e. above {boundary_significance}$\sigma$",
+    f"With Noise ({test_nsb_level_pe} p.e.), Denoising, Tailcuts({picture_significance}$\sigma$, {boundary_significance}$\sigma$), p.e. above {boundary_significance}$\sigma$",
+]
+values = [
+    trials_no_noise_no_cleaning,
+    trials_noise_cleaning,
+    trials_noise_denoising,
+]
+fig, axs = plt.subplots(3, 1, constrained_layout=True, sharex=True)
+for ax, trials, title in zip(axs, values, titles):
+    pred = np.array([t.psi.to_value(u.deg) - true_psi.to_value(u.deg) for t in trials])
+    unc = np.array([t.psi_uncertainty.to_value(u.deg) for t in trials])
+    limits = np.quantile(pred, [0.001, 0.999])
+    hist, edges, plot = ax.hist(pred, bins=51, range=limits, density=True)
+    x = np.linspace(edges[0], edges[-1], 500)
+    ax.plot(x, norm.pdf(x, pred.mean(), pred.std()))
+    ax.plot(x, norm.pdf(x, 0.0, unc.mean()))
+    ax.set_title(title)
+axs[len(axs) - 1].set_xlabel("Psi / deg")
+fig.savefig(f"{ctapipe_output}/output_plots/hillas_uncertainties_denoising.png", dpi=300)
