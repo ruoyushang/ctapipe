@@ -2,22 +2,24 @@ import numpy as np
 import torch
 import torch.nn as nn
 import time
+import astropy.units as u
 
 from ctapipe.image import (
     number_of_islands,
     tailcuts_clean,
 )
+from ctapipe.image.toymodel import Gaussian
 
 cleaning_level = {
-    "DigiCam": (3, 5, 2),
-    "ASTRICam": (3, 5, 2),
-    "CHEC": (3, 5, 2),
-    "LSTCam": (3, 5, 2),
-    "FlashCam": (3, 5, 2),
-    "NectarCam": (3, 5, 2),
-    "SCTCam": (3, 5, 2),
+    "DigiCam": (5, 10, 2),
+    "ASTRICam": (5, 10, 2),
+    "CHEC": (5, 10, 2),
+    "LSTCam": (5, 10, 2),
+    "FlashCam": (5, 10, 2),
+    "NectarCam": (5, 10, 2),
+    "SCTCam": (5, 10, 2),
 }
-#cleaning_level_significance_default = (4, 5, 2)
+#cleaning_level_significance_default = (5, 6, 2)
 cleaning_level_significance_default = (3, 4, 2)
 #cleaning_level_significance_default = (2, 3, 2)
 # cleaning_level_significance_default = (1, 2, 2)
@@ -86,6 +88,7 @@ def dynamic_cleaning(
     boundary_significance,
     picture_significance,
     min_neighbors_significance,
+    keep_main=True,
 ):
 
     boundary, picture, min_neighbors = cleaning_level[geometry.name]
@@ -155,7 +158,8 @@ def dynamic_cleaning(
         picture_thresh=picture,
         min_number_picture_neighbors=min_neighbors_significance,
     )
-    keep_main_island(geometry, image_mask)
+    if keep_main:
+        keep_main_island(geometry, image_mask)
 
     return image_mask, night_sky_mean, night_sky_rms, image_mean
 
@@ -266,10 +270,28 @@ def denoising_image(denoiser_model_pkl, geometry, noisy_image, clean_image, appl
         return denoise_mask
 
 
-def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, threshold=5.):
+def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.1, freq=1, config={}):
     """
     @h0: 1st step size
     """
+
+    (
+        boundary_significance,
+        picture_significance,
+        min_neighbors_significance,
+    ) = cleaning_level_significance[geometry.name]
+
+    keep_main = True
+    denoise_threshold = 5.
+    restore = True
+    cleaning_picture = picture_significance
+    cleaning_boundary = boundary_significance
+    if len(config)>0:
+        keep_main = config["keep_main"]
+        denoise_threshold = config["denoise_threshold"]
+        restore = config["restore"]
+        cleaning_picture = config["cleaning_picture"]
+        cleaning_boundary = config["cleaning_boundary"]
 
     noisy_signal_2d = np.array(
         [geometry.image_to_cartesian_representation(noisy_image)]
@@ -291,18 +313,17 @@ def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, thre
         np.array(y[0])
     )
 
-    (
-        boundary_significance,
-        picture_significance,
-        min_neighbors_significance,
-    ) = cleaning_level_significance[geometry.name]
     denoise_mask, denoise_night_sky_mean, denoise_night_sky_rms, denoise_image_mean = dynamic_cleaning(
         geometry,
         y_1d,
-        boundary_significance,
-        picture_significance,
+        #boundary_significance,
+        #picture_significance,
+        cleaning_boundary,
+        cleaning_picture,
         min_neighbors_significance,
+        keep_main=keep_main,
     )
+    denoise_night_sky_rms_0 = denoise_night_sky_rms
 
     N = n_ch*n_pix_x*n_pix_y
     sigma_0 = torch.norm(y) / np.sqrt(N)
@@ -320,22 +341,23 @@ def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, thre
     denoise_night_sky_rms_minus1 = denoise_night_sky_rms
     #print (f"sigma = {sigma}, ratio = {sigma/sigma_0}")
 
-    (
-        boundary_significance,
-        picture_significance,
-        min_neighbors_significance,
-    ) = cleaning_level_significance[geometry.name]
+    #rng = np.random.default_rng(0)
+    #true_width = 0.05 * u.m
+    #true_length = 0.3 * u.m
+    #true_psi = 45 * u.deg
+    #true_x = 0.5 * u.m
+    #true_y = -0.2 * u.m
+    #image_model = Gaussian(true_x, true_y, true_length, true_width, true_psi)
 
     t = 1
     start_time_total = time.time()
     #while t < 10:
     #while sigma/sigma_0 > 0.05:
-    while denoise_image_mean/denoise_night_sky_rms<threshold*boundary_significance:
-    #while sigma/sigma_0 > 0.1 and denoise_image_mean/denoise_night_sky_rms<threshold*boundary_significance:
+    #while denoise_image_mean/denoise_night_sky_rms<denoise_threshold*boundary_significance:
+    while denoise_night_sky_rms_0/denoise_night_sky_rms < denoise_threshold:
 
         #h = h0 * t / (1 + (h0 * (t - 1)))
         h = h0
-        #h = 1.0
         with torch.no_grad():
             f_y = model(y)
 
@@ -347,10 +369,22 @@ def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, thre
         sigma_minus1 = sigma
 
         #beta = 0.9
+        #beta = 0.7
+        #beta = 0.5
         #gamma = sigma*np.sqrt(((1 - (beta*h))**2 - (1-h)**2 ))
         #noise = torch.randn(n_ch, n_pix_x, n_pix_y)
         #y = y + h*d + gamma*noise
+
+        #noisy_image, clean_image, _ = image_model.generate_image(
+        #    geometry, intensity=0., nsb_level_pe=denoise_night_sky_rms, rng=rng
+        #)
+        #noisy_image_2d = np.array(
+        #    [geometry.image_to_cartesian_representation(noisy_image)]
+        #)
+        #y = y + h*d + noisy_image_2d
+
         y = y + h*d
+
         y = y.to(torch.float32)
 
 
@@ -361,18 +395,24 @@ def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, thre
         denoise_mask, denoise_night_sky_mean, denoise_night_sky_rms, denoise_image_mean = dynamic_cleaning(
             geometry,
             y_1d,
-            boundary_significance,
-            picture_significance,
+            #boundary_significance,
+            #picture_significance,
+            cleaning_boundary,
+            cleaning_picture,
             min_neighbors_significance,
+            keep_main=keep_main,
         )
         #if denoise_night_sky_mean>denoise_night_sky_mean_minus1:
         #    break
         denoise_night_sky_mean_minus1 = denoise_night_sky_mean
         denoise_night_sky_rms_minus1 = denoise_night_sky_rms
 
-        for pix in range(0, len(denoise_mask)):
-            if denoise_mask[pix] == True:
-                y_1d[pix] = 1.0*noisy_image[pix] + 0.0*y_1d[pix]
+        if restore:
+            for pix in range(0, len(denoise_mask)):
+                if denoise_mask[pix] == True:
+                    #y_1d[pix] = 1.0*noisy_image[pix] + 0.0*y_1d[pix]
+                    y_1d[pix] = 0.5*noisy_image[pix] + 0.5*y_1d[pix]
+                    #y_1d[pix] = 0.0*noisy_image[pix] + 1.0*y_1d[pix]
         for pix in range(0,len(y_1d)):
             if y_1d[pix]<0.:
                 y_1d[pix] = 0.
@@ -400,9 +440,10 @@ def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, thre
     denoise_mask, denoise_night_sky_mean, denoise_night_sky_rms, denoise_image_mean = dynamic_cleaning(
         geometry,
         denoised_y_1d,
-        boundary_significance,
-        picture_significance,
+        cleaning_boundary,
+        cleaning_picture,
         min_neighbors_significance,
+        keep_main=keep_main,
     )
 
     noisy_image_mean = 0.
@@ -434,8 +475,10 @@ def univ_inv_sol(model, geometry, noisy_image, clean_image, h0=0.3, freq=1, thre
             denoised_y_1d[pix] = 0.0
             clean_image[pix] = 0.0
         else:
-            denoised_y_1d[pix] = max(0.0,denoised_y_1d[pix] - denoise_night_sky_mean - boundary_significance * denoise_night_sky_rms)
-            clean_image[pix] = max(0.0,noisy_image[pix] - denoise_night_sky_mean - boundary_significance * denoise_night_sky_rms)
+            #denoised_y_1d[pix] = max(0.0,denoised_y_1d[pix] - denoise_night_sky_mean - cleaning_boundary * denoise_night_sky_rms)
+            #clean_image[pix] = max(0.0,noisy_image[pix] - denoise_night_sky_mean - cleaning_boundary * denoise_night_sky_rms)
+            denoised_y_1d[pix] = max(0.0,denoised_y_1d[pix] - denoise_night_sky_mean - cleaning_boundary * denoise_night_sky_rms)
+            clean_image[pix] = denoised_y_1d[pix]
 
     #denoised_norm = np.sum(denoised_y_1d)
     #original_norm = np.sum(clean_image)

@@ -1,6 +1,7 @@
 import os, sys
 import pickle
 
+import random
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import AltAz, EarthLocation, SkyCoord, angular_separation
@@ -17,15 +18,53 @@ from ctapipe.reco import ShowerProcessor
 from ctapipe.utils.datasets import get_dataset_path
 from ctapipe.visualization import CameraDisplay
 
+from traitlets.config import Config
+
 ctapipe_output = os.environ.get("CTAPIPE_OUTPUT_PATH")
 ctapipe_input = os.environ.get("CTAPIPE_SVC_PATH")
 
 
+list_config = []
+list_config_tag = []
+
+
+config = {}
+config["keep_main"] = True
+config["restore"] = True
+config["denoise_threshold"] = 7.
+config["cleaning_picture"] = 3.
+config["cleaning_boundary"] = 2.
+denoise_tag = 'test1'
+list_config += [config]
+list_config_tag += [denoise_tag]
+
+config = {}
+config["keep_main"] = True
+config["restore"] = True
+config["denoise_threshold"] = 7.
+config["cleaning_picture"] = 4.
+config["cleaning_boundary"] = 3.
+denoise_tag = 'test2'
+list_config += [config]
+list_config_tag += [denoise_tag]
+
+config = {}
+config["keep_main"] = True
+config["restore"] = True
+config["denoise_threshold"] = 7.
+config["cleaning_picture"] = 5.
+config["cleaning_boundary"] = 4.
+denoise_tag = 'test3'
+list_config += [config]
+list_config_tag += [denoise_tag]
+
+
+
 # array_type = 'LST_Nectar_ASTRI'
+#array_type = 'LSTCam'
 array_type = 'SCT'
 #array_type = "NectarCam"
 # array_type = 'Flash'
-# array_type = 'LSTCam'
 #array_type = 'ASTRI'
 # array_type = 'CHEC'
 #array_type = 'DigiCam'
@@ -41,6 +80,8 @@ if len(sys.argv)>1:
     pointing = sys.argv[2]
 print (f"array_type = {array_type}")
 
+chi2_fit = True
+#chi2_fit = False
 
 make_plot = False
 #make_plot = True
@@ -48,8 +89,8 @@ make_plot = False
 ana_tag = f"psi_unc_{array_type}_{pointing}"
 
 select_evt = None
-#run_id = 402
-#event_id = 600
+#run_id = 4949
+#event_id = 143900
 #select_evt = [run_id, event_id]
 
 telescope_type = []
@@ -93,7 +134,9 @@ if "DigiCam" in ana_tag:
 #        denoiser_model_pkl["LSTCam"] = pickle.load(open(output_filename, "rb"))
 
 denoiser_model_pkl = None
-output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_10pe.pkl"
+output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_20pe.pkl"
 if not os.path.exists(output_filename):
     print(f"{output_filename} does not exist.")
     exit()
@@ -102,6 +145,75 @@ else:
 
 def sigmoid(x):
   return 1 / (1 + np.exp(-x))
+
+def find_intersection_multiple_lines(
+    list_img_size,
+    list_img_length,
+    list_img_width,
+    list_img_nom_cen_x,
+    list_img_nom_cen_y,
+    list_img_angle,
+    list_img_unc_angle,
+    list_img_ry_unc,
+    list_img_frac_leakage,
+):
+
+    pair_weight = []
+    pair_x = []
+    pair_y = []
+    pair_err = []
+    for i1 in range(0, len(list_img_size) - 1):
+        for i2 in range(i1 + 1, len(list_img_size)):
+            x1 = list_img_nom_cen_x[i1]
+            x2 = list_img_nom_cen_x[i2]
+            y1 = list_img_nom_cen_y[i1]
+            y2 = list_img_nom_cen_y[i2]
+            a1 = 1./np.tan(list_img_angle[i1])
+            a2 = 1./np.tan(list_img_angle[i2])
+            b1 = y1 - a1 * x1
+            b2 = y2 - a2 * x2
+
+            asymmetry_1 = (list_img_length[i1]-list_img_width[i1])/(list_img_length[i1]+list_img_width[i1])
+            asymmetry_2 = (list_img_length[i2]-list_img_width[i2])/(list_img_length[i2]+list_img_width[i2])
+            asymmetry = min(asymmetry_1,asymmetry_2)
+            #if asymmetry<0.3:
+            #    continue
+
+            open_angle = abs(list_img_angle[i1] - list_img_angle[i2])
+
+            pair_fit_x = (b2-b1) / (a1-a2)
+            pair_fit_y = a1*pair_fit_x + b1
+
+            l1 = pow( pow(pair_fit_x-x1,2) + pow(pair_fit_y-y1,2) ,0.5)
+            l2 = pow( pow(pair_fit_x-x2,2) + pow(pair_fit_y-y2,2) ,0.5)
+
+            err1 = pow( pow(l1*list_img_angle[i1],2) + pow(list_img_ry_unc[i1],2) ,0.5)
+            err2 = pow( pow(l2*list_img_angle[i2],2) + pow(list_img_ry_unc[i2],2) ,0.5)
+            err = pow(err1*err2/np.sin(open_angle),0.5)
+
+            pair_x += [pair_fit_x]
+            pair_y += [pair_fit_y]
+            pair_err += [err]
+            pair_weight += [1./(err*err)]
+
+    src_x = 0.
+    src_y = 0.
+    src_err = 0.
+    sum_weight = 0.
+    for p in range(0,len(pair_weight)):
+        src_x += pair_x[p] * pair_weight[p]
+        src_y += pair_y[p] * pair_weight[p]
+        src_err += pair_err[p] * pair_weight[p]
+        sum_weight += pair_weight[p]
+
+    if sum_weight==0.:
+        return 0., 0., 1e10
+
+    src_x = src_x/sum_weight
+    src_y = src_y/sum_weight
+    src_err = src_err/sum_weight
+
+    return src_x, src_y, src_err
 
 def source_location_chi2(
     input_xy,
@@ -147,8 +259,8 @@ def source_location_chi2(
         rotat_try_x = 1.0 * rotat_coord[0]
         rotat_try_y = -1.0 * rotat_coord[1]
 
-        unc_minor = pow(rotat_try_y * list_img_unc_angle[img], 2) 
-        unc_minor += pow(list_img_ry_unc[img], 2)
+        unc_minor = pow(rotat_try_y * 1.0*list_img_unc_angle[img], 2) 
+        unc_minor += pow(1.0*list_img_ry_unc[img], 2)
         unc_minor = pow(unc_minor,0.5)
         #unc_minor = rotat_try_y * list_img_unc_angle[img]
         #unc_minor += pow(2.*list_img_length[img] * (sigmoid(list_img_length[img]/abs(rotat_try_y))-0.5), 2)
@@ -156,8 +268,9 @@ def source_location_chi2(
         # weight = list_img_size[img] * list_img_length[img] / list_img_width[img]
         # chi2_default += weight * pow(rotat_try_x,2)
 
-        # weight_new = np.sqrt(list_img_size[img])
         weight_new = 1.0
+        #weight_new = np.sqrt(list_img_size[img])
+        #weight_new = list_img_length[img] / list_img_width[img]
         total_weight += weight_new
         chi2_new += weight_new * pow((rotat_try_x) / unc_minor, 2)
 
@@ -496,6 +609,7 @@ def psi_uncertainty_truncated_image(geometry, image):
 
 def plot_monoscopic_reconstruction(
     ctapipe_output,
+    denoising_tag,
     source,
     run_id,
     tel_id,
@@ -513,6 +627,7 @@ def plot_monoscopic_reconstruction(
     img_psi,
     img_psi_unc,
     img_ry_unc,
+    img_kurtosis,
     img_frac_leakage,
 ):
     event_id = event.index["event_id"]
@@ -594,7 +709,7 @@ def plot_monoscopic_reconstruction(
 
     titles = []
     titles += ["noisy image"]
-    titles += [f"cleaned image (SNR = {img_snr:0.2f}, length/width = {img_length/img_width:0.2f})"]
+    titles += [f"cleaned image (SNR = {img_snr:0.2f}, length/width = {img_length/img_width:0.2f}, kurtosis = {img_kurtosis:0.2f})"]
 
     # fig, axs = plt.subplots(1, 2, constrained_layout=True, sharex=True)
     fig, axs = plt.subplots(1, 2, figsize=(2.0 * 8.6, 6.4))
@@ -636,7 +751,7 @@ def plot_monoscopic_reconstruction(
         ax.scatter(star_cam_x, star_cam_y, s=90, facecolors="none", c="r", marker="+")
         ax.set_title(title)
     fig.savefig(
-        f"{ctapipe_output}/output_plots/run{run_id}_evt{event_id}_tel{tel_id}_denoised_image.png",
+        f"{ctapipe_output}/output_plots/run{run_id}_evt{event_id}_tel{tel_id}_{denoising_tag}_denoised_image.png",
         bbox_inches="tight",
     )
     del fig
@@ -646,6 +761,8 @@ def plot_monoscopic_reconstruction(
 
 def loop_all_events(
     ana_tag,
+    denoising_config,
+    denoising_tag,
     training_sample_path,
     ctapipe_output,
     list_telescope_type,
@@ -678,8 +795,32 @@ def loop_all_events(
     subarray_table.pprint(nlines)
     print(source.subarray.to_table())
 
+    image_processor_config = Config(
+        {
+            "ImageProcessor": {
+                "image_cleaner_type": "TailcutsImageCleaner",
+                "TailcutsImageCleaner": {
+                    "picture_threshold_pe": [
+                        ("type", "LST_LST_LSTCam", 7.5),
+                        ("type", "MST_MST_FlashCam", 8),
+                        ("type", "MST_MST_NectarCam", 8),
+                        ("type", "SST_ASTRI_CHEC", 7),
+                        ("type", "MST_SCT_SCTCam", 3.5),
+                    ],
+                    "boundary_threshold_pe": [
+                        ("type", "LST_LST_LSTCam", 5),
+                        ("type", "MST_MST_FlashCam", 4),
+                        ("type", "MST_MST_NectarCam", 4),
+                        ("type", "SST_ASTRI_CHEC", 4),
+                        ("type", "MST_SCT_SCTCam", 2.5),
+                    ],
+                },
+            }
+        }
+    )
+
     calib = CameraCalibrator(subarray=source.subarray)
-    image_processor = ImageProcessor(subarray=source.subarray)
+    image_processor = ImageProcessor(subarray=source.subarray, config=image_processor_config)
     shower_processor = ShowerProcessor(subarray=source.subarray)
 
     ob_keys = source.observation_blocks.keys()
@@ -716,8 +857,8 @@ def loop_all_events(
         truth_alt = float(event.simulation.shower.alt / u.rad)
         truth_az = float(event.simulation.shower.az / u.rad)
         truth_energy = float(event.simulation.shower.energy / u.TeV)
-        # if truth_energy<5.:
-        #    continue
+        #if truth_energy<1.:
+        #   continue
 
         calib(event)  # fills in r1, dl0, and dl1
         image_processor(event)
@@ -770,9 +911,11 @@ def loop_all_events(
         list_img_cen_y = []
         list_img_psi = []
         list_img_psi_unc = []
+        list_img_psi_err = []
         list_img_ry_unc = []
         list_img_frac_leakage = []
         list_img_snr = []
+        list_img_kurtosis = []
         list_truth_psi = []
 
         for tel_idx in range(0, len(list(event.dl0.tel.keys()))):
@@ -789,7 +932,7 @@ def loop_all_events(
             )
 
             init_clean_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            init_image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(geometry,event.dl1.tel[tel_id].image,init_clean_image_1d,original_count=False)
+            init_image_mask, init_noisy_image_mean, init_noisy_background_mean, init_noisy_background_rms = cleaning_image(geometry,event.dl1.tel[tel_id].image,init_clean_image_1d,original_count=False)
             init_image_size = np.sum(init_clean_image_1d)
 
             n_init_mask_pixels = 0
@@ -816,8 +959,10 @@ def loop_all_events(
                 event.dl1.tel[tel_id].image,
                 clean_image_1d,
                 freq = 10,
+                config = denoising_config,
             )
             image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
+            image_snr_0 = (noisy_image_mean-noisy_background_mean)/init_noisy_background_rms
 
             image_size = np.sum(clean_image_1d)
             if image_size == 0.0:
@@ -837,7 +982,8 @@ def loop_all_events(
                 frac_leakage_intensity = leakage_intensity / n_pe_cleaning
 
             hillas_results = hillas_parameters(geometry, clean_image_1d)
-            # print (f"hillas_results = {hillas_results}")
+            #print (f"hillas_results = {hillas_results}")
+            kurtosis = hillas_results["kurtosis"]
             intensity = hillas_results["intensity"]
             length = hillas_results["length"].to_value(u.m)
             width = hillas_results["width"].to_value(u.m)
@@ -854,16 +1000,18 @@ def loop_all_events(
             if np.isnan(psi_uncertainty):
                 continue
 
-            if frac_leakage_intensity > 0.0:
-                edge_psi_uncertainty = psi_uncertainty_truncated_image(
-                    geometry, clean_image_1d
-                )
-                print(
-                    f"psi_uncertainty = {psi_uncertainty*180./np.pi:0.3f} deg, edge_psi_uncertainty = {edge_psi_uncertainty*180./np.pi:0.3f} deg"
-                )
-                psi_uncertainty = pow(
-                    pow(psi_uncertainty, 2) + pow(edge_psi_uncertainty, 2), 0.5
-                )
+            #if frac_leakage_intensity > 0.0:
+            #    if length / width < 2.0:
+            #        continue
+            #    #edge_psi_uncertainty = psi_uncertainty_truncated_image(
+            #    #    geometry, clean_image_1d
+            #    #)
+            #    #print(
+            #    #    f"psi_uncertainty = {psi_uncertainty*180./np.pi:0.3f} deg, edge_psi_uncertainty = {edge_psi_uncertainty*180./np.pi:0.3f} deg"
+            #    #)
+            #    #psi_uncertainty = pow(
+            #    #    pow(psi_uncertainty, 2) + pow(edge_psi_uncertainty, 2), 0.5
+            #    #)
 
             pix_width = float(geometry.pixel_width[0] / u.m)
             # psi_uncertainty = max(psi_uncertainty,width/length)
@@ -891,7 +1039,11 @@ def loop_all_events(
                     event_id,
                     tel_id,
                     image_size,
+                    image_snr,
                     frac_leakage_intensity,
+                    length,
+                    width,
+                    kurtosis,
                 ]
             ]
 
@@ -900,18 +1052,16 @@ def loop_all_events(
             )
 
 
-            if image_snr < 1.2:
-                continue
-            #if init_image_size < 20.0:
-            #    continue
-            #if psi_uncertainty > 30.0 * np.pi / 180.0:
-            #    continue
-            #if intensity < 10.0:
-            #    continue
             if width == 0.0:
                 continue
-            if length / width < 1.3:
+            if image_snr < 1.0:
                 continue
+            if image_snr_0 < 1.0:
+                continue
+            if length / width < 1.5:
+                continue
+            #if image_size < 20.0:
+            #    continue
             #if n_init_mask_pixels<5: 
             #    continue
             #if float(n_mask_pixels)/float(len(image_mask))>0.5: 
@@ -924,6 +1074,7 @@ def loop_all_events(
             list_clean_image += [clean_image_1d]
             list_mask += [image_mask]
             list_img_snr += [image_snr]
+            list_img_kurtosis += [kurtosis]
             list_img_size += [intensity]
             list_img_islands += [n_islands[0]]
             list_img_length += [length/focal_length]
@@ -932,6 +1083,7 @@ def loop_all_events(
             list_img_cen_y += [cog_nom_y]
             list_img_psi += [psi]
             list_img_psi_unc += [psi_uncertainty]
+            list_img_psi_err += [psi_error]
             list_img_ry_unc += [
                 max(0.5*pix_width, transverse_cog_uncertainty) / focal_length
             ]
@@ -939,61 +1091,12 @@ def loop_all_events(
             list_img_frac_leakage += [frac_leakage_intensity]
             list_truth_psi += [truth_psi]
 
+            print (f"psi_err = {psi_error*180./np.pi:0.2f}, psi_unc = {psi_uncertainty*180./np.pi:0.2f}, intensity = {intensity:0.1f}, length = {length/focal_length:0.2f}, length/width = {length / width:0.2f}")
+
         if len(list_img_size) < 2:
             continue
 
-        brute_fov = 4.0 / 180.0 * np.pi
-        brute_ranges = ((-brute_fov, brute_fov), (-brute_fov, brute_fov))
-        grid_points = 40
-        solution = brute(
-            source_location_chi2,
-            brute_ranges,
-            args=(
-                list_img_size,
-                list_img_length,
-                list_img_width,
-                list_img_cen_x,
-                list_img_cen_y,
-                list_img_psi,
-                list_img_psi_unc,
-                list_img_ry_unc,
-                list_img_frac_leakage,
-            ),
-            Ns=grid_points,
-        )
-        fit_params = solution
-        fit_nom_x = fit_params[0]
-        fit_nom_y = fit_params[1]
-
-        init_params = [fit_nom_x, fit_nom_y]
-        # init_params = [default_nom_x,default_nom_y]
-        angular_step = 0.001 * np.pi / 180.0
-        stepsize = [angular_step, angular_step]
-        ftol = 0.00001
-        solution = minimize(
-            source_location_chi2,
-            x0=init_params,
-            args=(
-                list_img_size,
-                list_img_length,
-                list_img_width,
-                list_img_cen_x,
-                list_img_cen_y,
-                list_img_psi,
-                list_img_psi_unc,
-                list_img_ry_unc,
-                list_img_frac_leakage,
-            ),
-            method="L-BFGS-B",
-            jac=None,
-            options={"eps": stepsize, "ftol": ftol},
-        )
-        fit_params = solution["x"]
-        fit_nom_x = fit_params[0]
-        fit_nom_y = fit_params[1]
-
-        fit_nom_unc = compute_location_uncertainty(
-            fit_params,
+        fit_nom_x, fit_nom_y, fit_nom_unc = find_intersection_multiple_lines(
             list_img_size,
             list_img_length,
             list_img_width,
@@ -1004,6 +1107,71 @@ def loop_all_events(
             list_img_ry_unc,
             list_img_frac_leakage,
         )
+
+        if chi2_fit:
+
+            brute_fov = 4.0 / 180.0 * np.pi
+            brute_ranges = ((-brute_fov, brute_fov), (-brute_fov, brute_fov))
+            grid_points = 40
+            solution = brute(
+                source_location_chi2,
+                brute_ranges,
+                args=(
+                    list_img_size,
+                    list_img_length,
+                    list_img_width,
+                    list_img_cen_x,
+                    list_img_cen_y,
+                    list_img_psi,
+                    list_img_psi_unc,
+                    list_img_ry_unc,
+                    list_img_frac_leakage,
+                ),
+                Ns=grid_points,
+            )
+            fit_params = solution
+            fit_nom_x = fit_params[0]
+            fit_nom_y = fit_params[1]
+
+            init_params = [fit_nom_x, fit_nom_y]
+            # init_params = [default_nom_x,default_nom_y]
+            angular_step = 0.001 * np.pi / 180.0
+            stepsize = [angular_step, angular_step]
+            ftol = 0.00001
+            solution = minimize(
+                source_location_chi2,
+                x0=init_params,
+                args=(
+                    list_img_size,
+                    list_img_length,
+                    list_img_width,
+                    list_img_cen_x,
+                    list_img_cen_y,
+                    list_img_psi,
+                    list_img_psi_unc,
+                    list_img_ry_unc,
+                    list_img_frac_leakage,
+                ),
+                method="L-BFGS-B",
+                jac=None,
+                options={"eps": stepsize, "ftol": ftol},
+            )
+            fit_params = solution["x"]
+            fit_nom_x = fit_params[0]
+            fit_nom_y = fit_params[1]
+
+            fit_nom_unc = compute_location_uncertainty(
+                fit_params,
+                list_img_size,
+                list_img_length,
+                list_img_width,
+                list_img_cen_x,
+                list_img_cen_y,
+                list_img_psi,
+                list_img_psi_unc,
+                list_img_ry_unc,
+                list_img_frac_leakage,
+            )
 
         n_tels = len(list_img_psi)
         min_dist_to_img = 1e10
@@ -1056,14 +1224,8 @@ def loop_all_events(
         # if (default_location_err_deg-location_err_deg)/location_unc_deg < -2.: exit()
 
         is_good_result = True
-        # if min_dist_to_img<0.1:
-        #    is_good_result = False
-        # if min_dist_to_img>100.:
-        #    is_good_result = False
-
-        # if location_err_deg/location_unc_deg>5.:
-        #    if is_good_result:
-        #        exit()
+        if location_unc_deg>10.:
+            is_good_result = False
 
         if not np.isnan(default_location_unc_deg) and not np.isnan(
             default_location_err_deg
@@ -1091,20 +1253,25 @@ def loop_all_events(
                     [list_img_frac_leakage[tel]],
                 )
                 src_chi = pow(src_chi2, 0.5)
-                #if src_chi < 4.0:
-                #    continue
-                #if list_img_size[tel] < 2000.0:
-                #    continue
-                #if list_img_islands[tel]<2:
-                #    continue
-                if not default_location_err_deg<0.1*location_err_deg:
-                    continue
-                #if location_err_deg/location_unc_deg<5.0:
-                #    continue
+                img_psi_unc = list_img_psi_unc[tel] * 180./np.pi
+                img_psi_err = list_img_psi_err[tel] * 180./np.pi
+
+                if select_evt == None:
+                    if len(list_img_size)<5:
+                        continue
+                    if default_location_err_deg>0.2:
+                        continue
+                    if default_location_err_deg>location_err_deg:
+                        continue
+                    #if location_err_deg/location_unc_deg<3.0:
+                    #    continue
+                    #if src_chi < 3.0:
+                    #    continue
 
                 print("making a plot...")
                 plot_monoscopic_reconstruction(
                     ctapipe_output,
+                    denoising_tag,
                     source,
                     run_id,
                     list_tel_id[tel],
@@ -1122,6 +1289,7 @@ def loop_all_events(
                     list_img_psi[tel],
                     list_img_psi_unc[tel],
                     list_img_ry_unc[tel],
+                    list_img_kurtosis[tel],
                     list_img_frac_leakage[tel],
                 )
 
@@ -1130,7 +1298,7 @@ def loop_all_events(
 
         if save_output:
             output_filename = (
-                f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_mono.pkl"
+                f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_{denoising_tag}_mono.pkl"
             )
             print(f"writing file to {output_filename}")
             with open(output_filename, "wb") as file:
@@ -1140,7 +1308,7 @@ def loop_all_events(
                 )
 
             output_filename = (
-                f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_array_default.pkl"
+                f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_{denoising_tag}_array_default.pkl"
             )
             print(f"writing file to {output_filename}")
             with open(output_filename, "wb") as file:
@@ -1150,7 +1318,7 @@ def loop_all_events(
                 )
 
             output_filename = (
-                f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_array_new.pkl"
+                f"{ctapipe_output}/output_analysis/{ana_tag}_run{run_id}_{denoising_tag}_array_new.pkl"
             )
             print(f"writing file to {output_filename}")
             with open(output_filename, "wb") as file:
@@ -1180,15 +1348,50 @@ else:
     else:
         sim_files = "mst_diffuse_test.txt"
 
+#with open(f"{ctapipe_input}/{sim_files}", "r") as file:
+#    for line in file:
+#        training_sample_path = get_dataset_path(line.strip("\n"))
+#
+#        run_id = line.split("_")[3].strip("run")
+#        print(f"run_id = {run_id}")
+#
+#        loop_all_events(
+#            ana_tag,
+#            training_sample_path,
+#            ctapipe_output,
+#            telescope_type,
+#            select_evt=select_evt,
+#            save_output=True,
+#            make_plot=make_plot,
+#        )
+
+for config, config_tag in zip(list_config, list_config_tag):
+    print (f"{config_tag}")
+    print (config)
+
+list_training_sample_path = []
 with open(f"{ctapipe_input}/{sim_files}", "r") as file:
     for line in file:
-        training_sample_path = get_dataset_path(line.strip("\n"))
-
+        line = line.strip("\n")
         run_id = line.split("_")[3].strip("run")
-        print(f"run_id = {run_id}")
+        if not select_evt == None:
+            if int(run_id)!=select_evt[0]:
+                continue
+        print(f"{ctapipe_input}/{line}")
+        if not os.path.exists(f'{ctapipe_input}/{line}'):
+            print (f"{ctapipe_input}/{line} does not exist.")
+            continue
+        training_sample_path = get_dataset_path(line)
+        list_training_sample_path += [training_sample_path]
 
+random.shuffle(list_training_sample_path)
+for entry in range(0,len(list_training_sample_path)):
+    training_sample_path = list_training_sample_path[entry]
+    for config, config_tag in zip(list_config, list_config_tag):
         loop_all_events(
             ana_tag,
+            config,
+            config_tag,
             training_sample_path,
             ctapipe_output,
             telescope_type,
@@ -1196,3 +1399,4 @@ with open(f"{ctapipe_input}/{sim_files}", "r") as file:
             save_output=True,
             make_plot=make_plot,
         )
+

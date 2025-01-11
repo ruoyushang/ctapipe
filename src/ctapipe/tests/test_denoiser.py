@@ -2,6 +2,7 @@ import os
 import pickle
 import time
 
+import random
 import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,16 +32,16 @@ ctapipe_output = os.environ.get("CTAPIPE_OUTPUT_PATH")
 
 #train_model = True
 train_model = False
-#toy_test = True
-toy_test = False
-sim_test = True
-#sim_test = False
+toy_test = True
+#toy_test = False
+#sim_test = True
+sim_test = False
 
-#array_type = 'LSTCam'
+array_type = 'LSTCam'
 #array_type = "NectarCam"
 #array_type = 'FlashCam'
 #array_type = 'DigiCam'
-array_type = 'ASTRICam'
+#array_type = 'ASTRICam'
 #array_type = 'CHEC'
 #array_type = 'SCTCam'
 
@@ -55,6 +56,21 @@ select_evt = None
 #select_evt = [run_id, event_id]
 
 ana_tag = f"psi_unc_{array_type}_{pointing}"
+
+list_config = []
+list_config_tag = []
+
+config = {}
+config["keep_main"] = True
+config["restore"] = True
+config["denoise_threshold"] = 7.
+config["cleaning_picture"] = 3.
+config["cleaning_boundary"] = 2.
+denoise_tag = 'test1'
+list_config += [config]
+list_config_tag += [denoise_tag]
+
+
 
 telescope_type = []
 if "SCT" in ana_tag:
@@ -83,10 +99,12 @@ true_psi = 45 * u.deg
 true_x = 0.5 * u.m
 true_y = -0.2 * u.m
 
-image_intensity = 1000
+#image_intensity = 1000
 #nsb_level_pe = 3
 nsb_level_pe = 5
 #nsb_level_pe = 10
+#nsb_level_pe = 20
+#nsb_level_pe = 40
 
 # n_sample = 10
 n_sample = 100000
@@ -204,138 +222,179 @@ def loop_all_events(
             )
 
             #if init_image_mean/night_sky_rms<1.: continue
-            #if init_image_mean/night_sky_rms>10.: continue
+            if init_image_mean/night_sky_rms>7.: continue
+            print ("pass init selection...")
 
+            for denoising_config, denoising_tag in zip(list_config, list_config_tag):
 
-            tailcut_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            tailcut_image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(
-                geometry,
-                noisy_image_1d,
-                tailcut_image_1d, 
-                original_count=False,
-            )
-
-            denoiser_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            denoiser_image_mask = denoising_image(
-                denoiser_model_pkl,
-                geometry,
-                noisy_image_1d,
-                denoiser_image_1d,
-                apply_tailcut=False,
-            )
-
-            clean_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            universal_image_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
-                denoiser_model_pkl,
-                geometry,
-                noisy_image_1d,
-                clean_image_1d,
-                freq = 1,
-            )
-            image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
-
-            if image_snr<1.5: continue
-
-            pix_width = float(geometry.pixel_width.to_value(u.m)[0])
-
-            hillas_results = hillas_parameters(geometry, clean_image_1d)
-            intensity = hillas_results["intensity"]
-            length = hillas_results["length"].to_value(u.m)
-            width = hillas_results["width"].to_value(u.m)
-            cog_x = hillas_results["x"].to_value(u.m)
-            cog_y = hillas_results["y"].to_value(u.m)
-            psi = hillas_results["psi"].to_value(u.rad)
-            psi_uncertainty = hillas_results["psi_uncertainty"].to_value(u.rad)
-            transverse_cog_uncertainty = hillas_results[
-                "transverse_cog_uncertainty"
-            ].to_value(u.m)
-
-            if np.isnan(psi):
-                continue
-            if np.isnan(psi_uncertainty):
-                continue
-
-            #if length / pix_width < 2.:
-            #    continue
-            #if len(interm_Ys)<2:
-            #    continue
-
-            print ("making plot...")
-
-            middle_step_1 = min(int(0.2*float(len(interm_Ys))),len(interm_Ys)-1)
-            middle_step_2 = min(int(0.4*float(len(interm_Ys))),len(interm_Ys)-1)
-            middle_step_3 = min(int(0.6*float(len(interm_Ys))),len(interm_Ys)-1)
-            middle_step_4 = min(int(0.8*float(len(interm_Ys))),len(interm_Ys)-1)
-            values = []
-            titles = []
-            values += [[noisy_image_1d, interm_Ys[middle_step_1], interm_Ys[middle_step_2]]]
-            titles += [["noisy image", f"t={middle_step_1} step", f"t={middle_step_2} step"]]
-            values += [[interm_Ys[middle_step_3], interm_Ys[middle_step_4], interm_Ys[len(interm_Ys)-1]]]
-            titles += [[f"t={middle_step_3} step", f"t={middle_step_4} step", f"t={len(interm_Ys)-1} step"]]
-            fig, axs = plt.subplots(2, 3, figsize=(3.0 * 6.4, 2.0 * 4.8))
-            for ax1, trials1, title1 in zip(axs, values, titles):
-                for ax2, trials2, title2 in zip(ax1, trials1, title1):
-                    if len(trials2)==0: continue
-                    display = CameraDisplay(geometry, ax=ax2)
-                    display.image = trials2
-                    display.cmap = "Reds"
-                    ax2.set_title(title2)
-            fig.savefig(
-                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_iteration.png", 
-                dpi=300,
-                bbox_inches="tight",
-            )
-            del fig
-            del axs
-            plt.close()
-
-            values = []
-            titles = []
-            values += [noisy_image_1d, denoiser_image_1d]
-            titles += ["noisy image", "denoised image"]
-            fig, axs = plt.subplots(1, 2, figsize=(2.0 * 6.4, 1.0 * 4.8))
-            for ax1, trials1, title1 in zip(axs, values, titles):
-                display = CameraDisplay(geometry, ax=ax1)
-                display.image = trials1
-                display.cmap = "Reds"
-                ax1.set_title(title1)
-            fig.savefig(
-                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_original.png", 
-                dpi=300,
-                bbox_inches="tight",
-            )
-            del fig
-            del axs
-            plt.close()
-
-            values = []
-            titles = []
-            masks = []
-            if array_type == 'SCTCam':
-                values += [truth_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
-                titles += ["truth image", "original denoiser", "universal denoiser"]
-                masks += [tailcut_image_mask, universal_image_mask, universal_image_mask]
-            else:
-                values += [noisy_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
-                titles += ["noisy image", "original denoiser", "universal denoiser"]
-                masks += [tailcut_image_mask, denoiser_image_mask, universal_image_mask]
-            fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
-            for ax1, trials1, masks1, title1 in zip(axs, values, masks, titles):
-                display = CameraDisplay(geometry, ax=ax1)
-                display.image = trials1
-                display.cmap = "Reds"
-                ax1.set_title(title1)
-                display.highlight_pixels(
-                    masks1, color="xkcd:green", linewidth=0.5, alpha=1.0
+                tailcut_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
+                tailcut_image_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(
+                    geometry,
+                    noisy_image_1d,
+                    tailcut_image_1d, 
+                    original_count=False,
                 )
-            fig.savefig(
-                f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_universal.png", 
-                dpi=300,
-                bbox_inches="tight",
-            )
-            del fig
-            del axs
-            plt.close()
+
+                denoiser_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
+                denoiser_image_mask = denoising_image(
+                    denoiser_model_pkl,
+                    geometry,
+                    noisy_image_1d,
+                    denoiser_image_1d,
+                    apply_tailcut=False,
+                )
+
+                clean_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
+                universal_image_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
+                    denoiser_model_pkl,
+                    geometry,
+                    noisy_image_1d,
+                    clean_image_1d,
+                    freq = 1,
+                    config = denoising_config,
+                )
+                image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
+
+                if np.sum(clean_image_1d)==0.:
+                    continue
+                if image_snr<1.0: continue
+
+                pix_width = float(geometry.pixel_width.to_value(u.m)[0])
+
+                hillas_results = hillas_parameters(geometry, clean_image_1d)
+                kurtosis = hillas_results["kurtosis"]
+                intensity = hillas_results["intensity"]
+                length = hillas_results["length"].to_value(u.m)
+                width = hillas_results["width"].to_value(u.m)
+                cog_x = hillas_results["x"].to_value(u.m)
+                cog_y = hillas_results["y"].to_value(u.m)
+                psi = hillas_results["psi"].to_value(u.rad)
+                psi_uncertainty = hillas_results["psi_uncertainty"].to_value(u.rad)
+                transverse_cog_uncertainty = hillas_results[
+                    "transverse_cog_uncertainty"
+                ].to_value(u.m)
+
+                if np.isnan(psi):
+                    continue
+                if np.isnan(psi_uncertainty):
+                    continue
+
+                if length / pix_width < 2.:
+                    continue
+                #if len(interm_Ys)<2:
+                #    continue
+
+                print ("making plot...")
+
+                middle_step_1 = min(int(0.2*float(len(interm_Ys))),len(interm_Ys)-1)
+                middle_step_2 = min(int(0.4*float(len(interm_Ys))),len(interm_Ys)-1)
+                middle_step_3 = min(int(0.6*float(len(interm_Ys))),len(interm_Ys)-1)
+                middle_step_4 = min(int(0.8*float(len(interm_Ys))),len(interm_Ys)-1)
+                values = []
+                titles = []
+                values += [[noisy_image_1d, interm_Ys[middle_step_1], interm_Ys[middle_step_2]]]
+                titles += [["noisy image", f"t={middle_step_1} step", f"t={middle_step_2} step"]]
+                values += [[interm_Ys[middle_step_3], interm_Ys[middle_step_4], interm_Ys[len(interm_Ys)-1]]]
+                titles += [[f"t={middle_step_3} step", f"t={middle_step_4} step", f"t={len(interm_Ys)-1} step"]]
+                fig, axs = plt.subplots(2, 3, figsize=(3.0 * 6.4, 2.0 * 4.8))
+                for ax1, trials1, title1 in zip(axs, values, titles):
+                    for ax2, trials2, title2 in zip(ax1, trials1, title1):
+                        if len(trials2)==0: continue
+                        display = CameraDisplay(geometry, ax=ax2)
+                        display.image = trials2
+                        display.cmap = "Reds"
+                        #display.cmap = "Greys"
+                        ax2.set_title(title2)
+                fig.savefig(
+                    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_iteration_{denoising_tag}.png", 
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                del fig
+                del axs
+                plt.close()
+
+                values = []
+                titles = []
+                values += [noisy_image_1d, denoiser_image_1d]
+                titles += ["noisy image", "denoised image"]
+                fig, axs = plt.subplots(1, 2, figsize=(2.0 * 6.4, 1.0 * 4.8))
+                for ax1, trials1, title1 in zip(axs, values, titles):
+                    display = CameraDisplay(geometry, ax=ax1)
+                    display.image = trials1
+                    display.cmap = "Reds"
+                    #display.cmap = "Greys"
+                    ax1.set_title(title1)
+                fig.savefig(
+                    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_original_{denoising_tag}.png", 
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                del fig
+                del axs
+                plt.close()
+
+                if array_type == 'SCTCam':
+                    values = []
+                    titles = []
+                    masks = []
+                    values += [noisy_image_1d, truth_image_1d, interm_Ys[len(interm_Ys)-1]]
+                    titles += ["noisy image", "truth image", f"universal denoiser"]
+                    masks += [tailcut_image_mask, tailcut_image_mask, universal_image_mask]
+                    #values += [truth_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
+                    #titles += ["truth image", "original denoiser", f"universal denoiser"]
+                    #masks += [tailcut_image_mask, denoiser_image_mask, universal_image_mask]
+                    fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+                    for ax1, trials1, masks1, title1 in zip(axs, values, masks, titles):
+                        display = CameraDisplay(geometry, ax=ax1)
+                        display.image = trials1
+                        display.cmap = "Reds"
+                        #display.cmap = "Greys"
+                        ax1.set_title(title1)
+                        linewidth = 1.0
+                        alpha = 1.0
+                        display.highlight_pixels(
+                            masks1, color="green", linewidth=linewidth, alpha=alpha,
+                        )
+                        ax1.set_ylim(cog_y-4.*length, cog_y+4.*length)
+                        ax1.set_xlim(cog_x-4.*length, cog_x+4.*length)
+                    fig.savefig(
+                        f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_tailcut_{denoising_tag}.png", 
+                        dpi=300,
+                        bbox_inches="tight",
+                    )
+                    del fig
+                    del axs
+                    plt.close()
+
+                values = []
+                titles = []
+                masks = []
+                values += [noisy_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
+                titles += ["noisy image", "original denoiser", f"universal denoiser"]
+                masks += [tailcut_image_mask, denoiser_image_mask, universal_image_mask]
+                fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+                for ax1, trials1, masks1, title1 in zip(axs, values, masks, titles):
+                    display = CameraDisplay(geometry, ax=ax1)
+                    display.image = trials1
+                    display.cmap = "Reds"
+                    #display.cmap = "Greys"
+                    ax1.set_title(title1)
+                    linewidth = 1.0
+                    alpha = 1.0
+                    display.highlight_pixels(
+                        masks1, color="green", linewidth=linewidth, alpha=alpha,
+                    )
+                    ax1.set_ylim(cog_y-4.*length, cog_y+4.*length)
+                    ax1.set_xlim(cog_x-4.*length, cog_x+4.*length)
+                fig.savefig(
+                    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_denoiser_{denoising_tag}.png", 
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                del fig
+                del axs
+                plt.close()
 
 
 
@@ -459,14 +518,62 @@ def sample_with_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sig
 
     return [noisy_image, clean_image]
 
+def sample_with_non_gaussian_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sigma=0.0):
 
-def keep_main_island(geometry, image_mask):
-    n_islands = number_of_islands(geometry, image_mask)
-    for pix in range(0, len(n_islands[1])):
-        if n_islands[1][pix] == 1:
-            image_mask[pix] = True
-        else:
-            image_mask[pix] = False
+    pix_area = float(cam.pix_area.to_value(u.m**2)[0])
+    pix_width = 0.5 * float(cam.pixel_width.to_value(u.m)[0])
+
+    if length > 0.0:
+        true_length = length * pix_width * u.m
+    else:
+        true_length = 20.0 * pix_width * u.m
+    if width > 0.0:
+        true_width = width * pix_width * u.m
+    else:
+        true_width = 1.0 * pix_width * u.m
+    if image_intensity_sigma == 0.0:
+        image_intensity = (
+            np.random.uniform(low=10.0, high=20.0, size=None)
+            * nsb_level_pe
+            * (true_length.to_value(u.m) * true_width.to_value(u.m) / pix_area)
+        )
+    else:
+        image_intensity = (
+            image_intensity_sigma
+            * nsb_level_pe
+            * (true_length.to_value(u.m) * true_width.to_value(u.m) / pix_area)
+        )
+    true_psi = np.random.uniform(low=0.0, high=360.0, size=None) * u.deg
+    true_x = (
+        np.random.uniform(low=-0.7 * pix_x_max, high=0.7 * pix_x_max, size=None) * u.m
+    )
+    true_y = (
+        np.random.uniform(low=-0.7 * pix_y_max, high=0.7 * pix_y_max, size=None) * u.m
+    )
+
+    model = Gaussian(true_x, true_y, true_length, true_width, true_psi)
+    noisy_image, clean_image, _ = model.generate_image(
+        cam, intensity=1.0*image_intensity, nsb_level_pe=1.*nsb_level_pe, rng=rng
+    )
+
+    #noisy_image = np.random.poisson(0.5*nsb_level_pe, len(noisy_image))
+    #noisy_image += clean_image
+
+    df = 2
+    nonc = 0.5*nsb_level_pe
+    noisy_image = np.random.noncentral_chisquare(df, nonc, len(noisy_image))
+    noisy_image += clean_image
+
+    return [noisy_image, clean_image]
+
+
+#def keep_main_island(geometry, image_mask):
+#    n_islands = number_of_islands(geometry, image_mask)
+#    for pix in range(0, len(n_islands[1])):
+#        if n_islands[1][pix] == 1:
+#            image_mask[pix] = True
+#        else:
+#            image_mask[pix] = False
 
 
 if train_model:
@@ -525,7 +632,7 @@ if train_model:
             print(f"epoch = {epoch}, loss.item() = {loss.item()}")
     print("Training Complete")
     output_filename = (
-        f"{ctapipe_output}/output_machines/denoiser_model_{array_type}.pkl"
+        f"{ctapipe_output}/output_machines/denoiser_model_{array_type}_{int(nsb_level_pe)}pe.pkl"
     )
     with open(output_filename, "wb") as file:
         pickle.dump(denosing_model, file)
@@ -553,7 +660,9 @@ if train_model:
 
 #output_filename = f"{ctapipe_output}/output_machines/denoiser_model_{array_type}.pkl"
 #output_filename = f"{ctapipe_output}/output_machines/denoiser_model_NectarCam.pkl"
-output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_10pe.pkl"
+output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_20pe.pkl"
 if not os.path.exists(output_filename):
     print(f"{output_filename} does not exist.")
     exit()
@@ -564,7 +673,8 @@ else:
 
 if toy_test:
     test_images = [
-        sample_with_noise(nsb_level_pe=nsb_level_pe)
+        #sample_with_noise(nsb_level_pe=nsb_level_pe)
+        sample_with_non_gaussian_noise(nsb_level_pe=nsb_level_pe)
         #sample_with_noise(nsb_level_pe=0.5*nsb_level_pe,image_intensity_sigma=10.)
         #sample_with_noise(nsb_level_pe=nsb_level_pe,image_intensity_sigma=15.)
         #sample_with_noise(nsb_level_pe=nsb_level_pe,length=12.,width=2.,image_intensity_sigma=20.)
@@ -598,27 +708,29 @@ if toy_test:
 
         univ_inv_sol_image = np.zeros_like(noisy_signal)
         univ_inv_sol_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
-               denoiser_model_pkl,
-               cam,
-               noisy_signal,
-               univ_inv_sol_image,
-               freq = 1
+            denoiser_model_pkl,
+            cam,
+            noisy_signal,
+            univ_inv_sol_image,
+            freq = 1,
+            config = config,
         )
         image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
 
         middle_step = int(0.5*float(len(interm_Ys)))+1
         values = []
         titles = []
-        values += [[noisy_signal, truth_signal, tailcut_signal]]
-        titles += [["noisy image", "truth image", "tailcut on original image"]]
-        values += [[interm_Ys[1], interm_Ys[len(interm_Ys)-1], univ_inv_sol_image]]
-        titles += [["t=1 step", f"t={len(interm_Ys)-1} step", "tailcut on denoised image"]]
+        values += [[noisy_signal, tailcut_signal, denoising_signal]]
+        titles += [["noisy image", "tailcut on noisy image", "original denoised image"]]
+        values += [[interm_Ys[1], interm_Ys[len(interm_Ys)//2], interm_Ys[len(interm_Ys)-1]]]
+        titles += [["t=1 step", f"t={len(interm_Ys)//2} step", f"t={len(interm_Ys)-1} step"]]
         fig, axs = plt.subplots(2, 3, figsize=(3.0 * 6.4, 2.0 * 4.8))
         for ax1, trials1, title1 in zip(axs, values, titles):
             for ax2, trials2, title2 in zip(ax1, trials1, title1):
                 display = CameraDisplay(cam, ax=ax2)
                 display.image = trials2
                 display.cmap = "Reds"
+                #display.cmap = "Greys"
                 ax2.set_title(title2)
         fig.savefig(
             f"{ctapipe_output}/output_plots/image_trial_{trial}_universal_vs_tailcut.png", 
@@ -639,6 +751,7 @@ if toy_test:
             display = CameraDisplay(cam, ax=ax1)
             display.image = trials1
             display.cmap = "Reds"
+            #display.cmap = "Greys"
             ax1.set_title(title1)
         fig.savefig(
             f"{ctapipe_output}/output_plots/image_trial_{trial}_universal_vs_original.png", 
@@ -651,6 +764,7 @@ if toy_test:
 
 
 if sim_test:
+
     sim_files = None
     if "SCT" in ana_tag:
         if "proton" in ana_tag:
@@ -671,20 +785,29 @@ if sim_test:
         else:
             sim_files = "mst_diffuse_test.txt"
 
+    list_training_sample_path = []
     with open(f"{ctapipe_input}/{sim_files}", "r") as file:
         for line in file:
-            training_sample_path = get_dataset_path(line.strip("\n"))
-
+            line = line.strip("\n")
             run_id = line.split("_")[3].strip("run")
-            print(f"run_id = {run_id}")
+            print(f"{ctapipe_input}/{line}")
+            if not os.path.exists(f'{ctapipe_input}/{line}'):
+                print (f"{ctapipe_input}/{line} does not exist.")
+                continue
+            training_sample_path = get_dataset_path(line)
+            list_training_sample_path += [training_sample_path]
 
-            loop_all_events(
-                ana_tag,
-                training_sample_path,
-                ctapipe_output,
-                telescope_type,
-                denoiser_model_pkl,
-                select_evt=select_evt,
-            )
+    #random.shuffle(list_training_sample_path)
+    for entry in range(0,len(list_training_sample_path)):
+        training_sample_path = list_training_sample_path[entry]
 
-            #exit()
+        loop_all_events(
+            ana_tag,
+            training_sample_path,
+            ctapipe_output,
+            telescope_type,
+            denoiser_model_pkl,
+            select_evt=select_evt,
+        )
+
+        #exit()

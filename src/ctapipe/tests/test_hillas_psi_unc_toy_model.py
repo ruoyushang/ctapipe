@@ -19,6 +19,13 @@ ctapipe_output = os.environ.get("CTAPIPE_OUTPUT_PATH")
 
 rng = np.random.default_rng(0)
 
+config = {}
+config["keep_main"] = True
+config["restore"] = True
+config["denoise_threshold"] = 7.
+config["cleaning_picture"] = 3.
+config["cleaning_boundary"] = 2.
+
 cam_type = 'LSTCam'
 #cam_type = "NectarCam"
 #cam_type = 'FlashCam'
@@ -58,7 +65,8 @@ model = Gaussian(true_x, true_y, true_length, true_width, true_psi)
 
 
 #output_filename = f"{ctapipe_output}/output_machines/denoiser_model_{cam_type}.pkl"
-output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
+output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_10pe.pkl"
 denoiser_model_pkl = None
 if not os.path.exists(output_filename):
     print(f"{output_filename} does not exist.")
@@ -170,7 +178,8 @@ def sample_noise_with_universal_denoising(tag):
         cam,
         image,
         denoising_signal,
-        freq = 1
+        freq = 1,
+        config = config,
     )
 
     if np.sum(denoising_signal) <= 0.0:
