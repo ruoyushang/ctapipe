@@ -12,12 +12,12 @@ print(f"ctapipe_output = {ctapipe_output}")
 
 list_denoise_tag = []
 list_denoise_tag += ['test1']
-list_denoise_tag += ['test2']
-list_denoise_tag += ['test3']
+#list_denoise_tag += ['test2']
+#list_denoise_tag += ['test3']
 
-#array_type = 'SCT'
+array_type = 'SCT'
 #array_type = "Nectar"
-array_type = 'Flash'
+#array_type = 'Flash'
 #array_type = 'LST'
 #array_type = 'ASTRI'
 #array_type = 'CHEC'

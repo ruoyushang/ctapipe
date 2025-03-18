@@ -30,12 +30,10 @@ from ctapipe.reco import ShowerProcessor
 ctapipe_input = os.environ.get("CTAPIPE_SVC_PATH")
 ctapipe_output = os.environ.get("CTAPIPE_OUTPUT_PATH")
 
-#train_model = True
-train_model = False
-toy_test = True
-#toy_test = False
-#sim_test = True
-sim_test = False
+
+#project = 'train_model'
+project = 'toy_test'
+#project = 'sim_test'
 
 array_type = 'LSTCam'
 #array_type = "NectarCam"
@@ -55,7 +53,19 @@ select_evt = None
 #event_id = 24606
 #select_evt = [run_id, event_id]
 
-ana_tag = f"psi_unc_{array_type}_{pointing}"
+noise_type = 'poisson'
+#noise_type = 'noncentral_chisquare'
+
+#nsb_level_pe = 1
+#nsb_level_pe = 2
+#nsb_level_pe = 3
+#nsb_level_pe = 5
+nsb_level_pe = 10
+#nsb_level_pe = 20
+#nsb_level_pe = 30
+#nsb_level_pe = 40
+
+ana_tag = f"{array_type}_{pointing}_{noise_type}_{nsb_level_pe}"
 
 list_config = []
 list_config_tag = []
@@ -63,9 +73,10 @@ list_config_tag = []
 config = {}
 config["keep_main"] = True
 config["restore"] = True
-config["denoise_threshold"] = 7.
+config["denoise_threshold"] = 10.
 config["cleaning_picture"] = 3.
 config["cleaning_boundary"] = 2.
+config["min_neighbors"] = 2
 denoise_tag = 'test1'
 list_config += [config]
 list_config_tag += [denoise_tag]
@@ -100,11 +111,6 @@ true_x = 0.5 * u.m
 true_y = -0.2 * u.m
 
 #image_intensity = 1000
-#nsb_level_pe = 3
-nsb_level_pe = 5
-#nsb_level_pe = 10
-#nsb_level_pe = 20
-#nsb_level_pe = 40
 
 # n_sample = 10
 n_sample = 100000
@@ -117,6 +123,28 @@ font = {
     # "rotation": 0.0,
 }
 
+def histogram_with_bins(arr, bins=20, range=None):
+    """
+    Computes a histogram for any numeric 2D array.
+
+    Parameters:
+    -----------
+    arr : numpy.ndarray
+        A 2D array of numeric values.
+    bins : int or sequence
+        The bins specification (number of bins or bin edges).
+
+    Returns:
+    -----------
+    hist : numpy.ndarray
+        The counts for each bin.
+    bin_edges : numpy.ndarray
+        The edges of the bins.
+    """
+    flat = arr.flatten()
+    hist_bins = min(bins,int(range[1]))
+    hist, bin_edges = np.histogram(flat, bins=hist_bins, range=range)
+    return hist, bin_edges
 
 def loop_all_events(
     ana_tag,
@@ -198,15 +226,20 @@ def loop_all_events(
                 source.subarray.tel[tel_id].optics.equivalent_focal_length / u.m
             )
 
+            noisy_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
+            for pix in range(0, len(noisy_image_1d)):
+                noisy_image_1d[pix] = event.dl1.tel[tel_id].image[pix]
+
             truth_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            #print (f"event.simulation.tel[tel_id] = {event.simulation.tel[tel_id]}")
             if array_type == 'SCTCam':
                 for pix in range(0, len(truth_image_1d)):
                     truth_image_1d[pix] = event.simulation.tel[tel_id].true_image[pix]
 
-            noisy_image_1d = np.zeros_like(event.dl1.tel[tel_id].image)
-            for pix in range(0, len(noisy_image_1d)):
-                noisy_image_1d[pix] = event.dl1.tel[tel_id].image[pix]
+                #noise = np.random.poisson(1.0*nsb_level_pe, len(noisy_image_1d))
+                #df = 2
+                #noise = np.random.noncentral_chisquare(df, 1.0*nsb_level_pe, len(noisy_image_1d))
+                #noisy_image_1d = truth_image_1d + noise
+
 
             (
                 boundary_significance,
@@ -256,8 +289,11 @@ def loop_all_events(
                 image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
 
                 if np.sum(clean_image_1d)==0.:
+                    print ("failed size cut.")
                     continue
-                if image_snr<1.0: continue
+                if image_snr<1.0: 
+                    print ("failed snr cut.")
+                    continue
 
                 pix_width = float(geometry.pixel_width.to_value(u.m)[0])
 
@@ -275,11 +311,14 @@ def loop_all_events(
                 ].to_value(u.m)
 
                 if np.isnan(psi):
+                    print ("failed psi cut.")
                     continue
                 if np.isnan(psi_uncertainty):
+                    print ("failed unc cut.")
                     continue
 
                 if length / pix_width < 2.:
+                    print ("failed shape cut.")
                     continue
                 #if len(interm_Ys)<2:
                 #    continue
@@ -303,8 +342,10 @@ def loop_all_events(
                         display = CameraDisplay(geometry, ax=ax2)
                         display.image = trials2
                         display.cmap = "Reds"
-                        #display.cmap = "Greys"
                         ax2.set_title(title2)
+                        if array_type == 'SCTCam':
+                            ax2.set_ylim(cog_y-6.*length, cog_y+6.*length)
+                            ax2.set_xlim(cog_x-6.*length, cog_x+6.*length)
                 fig.savefig(
                     f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_iteration_{denoising_tag}.png", 
                     dpi=300,
@@ -314,50 +355,52 @@ def loop_all_events(
                 del axs
                 plt.close()
 
-                values = []
-                titles = []
-                values += [noisy_image_1d, denoiser_image_1d]
-                titles += ["noisy image", "denoised image"]
-                fig, axs = plt.subplots(1, 2, figsize=(2.0 * 6.4, 1.0 * 4.8))
-                for ax1, trials1, title1 in zip(axs, values, titles):
-                    display = CameraDisplay(geometry, ax=ax1)
-                    display.image = trials1
-                    display.cmap = "Reds"
-                    #display.cmap = "Greys"
-                    ax1.set_title(title1)
-                fig.savefig(
-                    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_original_{denoising_tag}.png", 
-                    dpi=300,
-                    bbox_inches="tight",
-                )
-                del fig
-                del axs
-                plt.close()
-
                 if array_type == 'SCTCam':
+                    #values = []
+                    #titles = []
+                    #masks = []
+                    #values += [noisy_image_1d, truth_image_1d, interm_Ys[len(interm_Ys)-1]]
+                    #titles += ["noisy image", "truth image", f"universal denoiser"]
+                    #masks += [tailcut_image_mask, tailcut_image_mask, universal_image_mask]
+                    ##values += [truth_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
+                    ##titles += ["truth image", "original denoiser", f"universal denoiser"]
+                    ##masks += [tailcut_image_mask, denoiser_image_mask, universal_image_mask]
+                    #fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+                    #for ax1, trials1, masks1, title1 in zip(axs, values, masks, titles):
+                    #    display = CameraDisplay(geometry, ax=ax1)
+                    #    display.image = trials1
+                    #    display.cmap = "Reds"
+                    #    #display.cmap = "Greys"
+                    #    ax1.set_title(title1)
+                    #    linewidth = 1.0
+                    #    alpha = 1.0
+                    #    display.highlight_pixels(
+                    #        masks1, color="green", linewidth=linewidth, alpha=alpha,
+                    #    )
+                    #    ax1.set_ylim(cog_y-4.*length, cog_y+4.*length)
+                    #    ax1.set_xlim(cog_x-4.*length, cog_x+4.*length)
+                    #fig.savefig(
+                    #    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_tailcut_{denoising_tag}.png", 
+                    #    dpi=300,
+                    #    bbox_inches="tight",
+                    #)
+                    #del fig
+                    #del axs
+                    #plt.close()
+
                     values = []
                     titles = []
                     masks = []
-                    values += [noisy_image_1d, truth_image_1d, interm_Ys[len(interm_Ys)-1]]
-                    titles += ["noisy image", "truth image", f"universal denoiser"]
-                    masks += [tailcut_image_mask, tailcut_image_mask, universal_image_mask]
-                    #values += [truth_image_1d, denoiser_image_1d, interm_Ys[len(interm_Ys)-1]]
-                    #titles += ["truth image", "original denoiser", f"universal denoiser"]
-                    #masks += [tailcut_image_mask, denoiser_image_mask, universal_image_mask]
+                    values += [noisy_image_1d, truth_image_1d, denoiser_image_1d]
+                    titles += ["noisy image", "truth image", "original denoiser"]
                     fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
-                    for ax1, trials1, masks1, title1 in zip(axs, values, masks, titles):
+                    for ax1, trials1, title1 in zip(axs, values, titles):
                         display = CameraDisplay(geometry, ax=ax1)
                         display.image = trials1
                         display.cmap = "Reds"
-                        #display.cmap = "Greys"
                         ax1.set_title(title1)
-                        linewidth = 1.0
-                        alpha = 1.0
-                        display.highlight_pixels(
-                            masks1, color="green", linewidth=linewidth, alpha=alpha,
-                        )
-                        ax1.set_ylim(cog_y-4.*length, cog_y+4.*length)
-                        ax1.set_xlim(cog_x-4.*length, cog_x+4.*length)
+                        ax1.set_ylim(cog_y-6.*length, cog_y+6.*length)
+                        ax1.set_xlim(cog_x-6.*length, cog_x+6.*length)
                     fig.savefig(
                         f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_tailcut_{denoising_tag}.png", 
                         dpi=300,
@@ -366,6 +409,7 @@ def loop_all_events(
                     del fig
                     del axs
                     plt.close()
+
 
                 values = []
                 titles = []
@@ -382,13 +426,14 @@ def loop_all_events(
                     ax1.set_title(title1)
                     linewidth = 1.0
                     alpha = 1.0
-                    display.highlight_pixels(
-                        masks1, color="green", linewidth=linewidth, alpha=alpha,
-                    )
-                    ax1.set_ylim(cog_y-4.*length, cog_y+4.*length)
-                    ax1.set_xlim(cog_x-4.*length, cog_x+4.*length)
+                    #display.highlight_pixels(
+                    #    masks1, color="green", linewidth=linewidth, alpha=alpha,
+                    #)
+                    if array_type == 'SCTCam':
+                        ax1.set_ylim(cog_y-6.*length, cog_y+6.*length)
+                        ax1.set_xlim(cog_x-6.*length, cog_x+6.*length)
                 fig.savefig(
-                    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_denoiser_{denoising_tag}.png", 
+                    f"{ctapipe_output}/output_plots/image_{array_type}_run{run_id}_evt{event_id}_tel{tel_id}_universal_{denoising_tag}.png", 
                     dpi=300,
                     bbox_inches="tight",
                 )
@@ -518,7 +563,7 @@ def sample_with_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sig
 
     return [noisy_image, clean_image]
 
-def sample_with_non_gaussian_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sigma=0.0):
+def sample_with_non_gaussian_noise(nsb_level_pe=5, length=0.0, width=0.0, image_intensity_sigma=0.0, noise_type='poisson'):
 
     pix_area = float(cam.pix_area.to_value(u.m**2)[0])
     pix_width = 0.5 * float(cam.pixel_width.to_value(u.m)[0])
@@ -533,14 +578,19 @@ def sample_with_non_gaussian_noise(nsb_level_pe=5, length=0.0, width=0.0, image_
         true_width = 1.0 * pix_width * u.m
     if image_intensity_sigma == 0.0:
         image_intensity = (
-            np.random.uniform(low=10.0, high=20.0, size=None)
-            * nsb_level_pe
+            np.random.uniform(low=20.0, high=40.0, size=None)
+            * np.sqrt(nsb_level_pe)
             * (true_length.to_value(u.m) * true_width.to_value(u.m) / pix_area)
         )
     else:
+        signal_scale = 1.0
+        if noise_type=='poisson':
+            signal_scale = 1.
+        if noise_type=='noncentral_chisquare':
+            signal_scale = 1.2
         image_intensity = (
-            image_intensity_sigma
-            * nsb_level_pe
+            signal_scale * image_intensity_sigma
+            * np.sqrt(nsb_level_pe)
             * (true_length.to_value(u.m) * true_width.to_value(u.m) / pix_area)
         )
     true_psi = np.random.uniform(low=0.0, high=360.0, size=None) * u.deg
@@ -550,19 +600,23 @@ def sample_with_non_gaussian_noise(nsb_level_pe=5, length=0.0, width=0.0, image_
     true_y = (
         np.random.uniform(low=-0.7 * pix_y_max, high=0.7 * pix_y_max, size=None) * u.m
     )
+    true_psi = 30. * u.deg
+    true_x = 0.3 * u.m
+    true_y = 0.3 * u.m
 
     model = Gaussian(true_x, true_y, true_length, true_width, true_psi)
     noisy_image, clean_image, _ = model.generate_image(
-        cam, intensity=1.0*image_intensity, nsb_level_pe=1.*nsb_level_pe, rng=rng
+        cam, intensity=1.0*image_intensity, nsb_level_pe=1.0*nsb_level_pe, rng=rng
     )
 
-    #noisy_image = np.random.poisson(0.5*nsb_level_pe, len(noisy_image))
-    #noisy_image += clean_image
+    if noise_type=='poisson':
+        noisy_image = np.random.poisson(nsb_level_pe, len(noisy_image))
+        noisy_image += clean_image
 
-    df = 2
-    nonc = 0.5*nsb_level_pe
-    noisy_image = np.random.noncentral_chisquare(df, nonc, len(noisy_image))
-    noisy_image += clean_image
+    if noise_type=='noncentral_chisquare':
+        df = 2
+        noisy_image = np.random.noncentral_chisquare(df, nsb_level_pe, len(noisy_image))
+        noisy_image += clean_image
 
     return [noisy_image, clean_image]
 
@@ -576,9 +630,14 @@ def sample_with_non_gaussian_noise(nsb_level_pe=5, length=0.0, width=0.0, image_
 #            image_mask[pix] = False
 
 
-if train_model:
+if project=='train_model':
+
+    #nsb_level_pe = 5
+    nsb_level_pe = 10
+    #nsb_level_pe = 20
     training_images = [
-        sample_with_noise(nsb_level_pe=nsb_level_pe) for _ in tqdm(range(n_sample))
+        #sample_with_noise(nsb_level_pe=nsb_level_pe) for _ in tqdm(range(n_sample))
+        sample_with_non_gaussian_noise(nsb_level_pe=nsb_level_pe) for _ in tqdm(range(n_sample))
     ]
     noisy_images = []
     clean_images = []
@@ -618,7 +677,7 @@ if train_model:
     criterion = CustomMSELoss()
 
     loss_values = []
-    epochs = 20
+    epochs = 50
     for epoch in range(epochs):
         for X, Y in train_dataloader:
             noisy_signal = X
@@ -658,11 +717,8 @@ if train_model:
 
     exit()
 
-#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_{array_type}.pkl"
-#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_NectarCam.pkl"
-#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam.pkl"
-#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_10pe.pkl"
-output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_20pe.pkl"
+#output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_5pe.pkl"
+output_filename = f"{ctapipe_output}/output_machines/denoiser_model_LSTCam_10pe.pkl"
 if not os.path.exists(output_filename):
     print(f"{output_filename} does not exist.")
     exit()
@@ -671,22 +727,37 @@ else:
     denoiser_model_pkl = pickle.load(open(output_filename, "rb"))
 
 
-if toy_test:
+if project=='toy_test':
     test_images = [
-        #sample_with_noise(nsb_level_pe=nsb_level_pe)
-        sample_with_non_gaussian_noise(nsb_level_pe=nsb_level_pe)
-        #sample_with_noise(nsb_level_pe=0.5*nsb_level_pe,image_intensity_sigma=10.)
-        #sample_with_noise(nsb_level_pe=nsb_level_pe,image_intensity_sigma=15.)
-        #sample_with_noise(nsb_level_pe=nsb_level_pe,length=12.,width=2.,image_intensity_sigma=20.)
-        for _ in tqdm(range(10))
+        #sample_with_noise(nsb_level_pe=nsb_level_pe,length=10.0,width=1.5,image_intensity_sigma=10.)
+        #sample_with_non_gaussian_noise(nsb_level_pe=nsb_level_pe) for _ in tqdm(range(3))
+        sample_with_non_gaussian_noise(nsb_level_pe=nsb_level_pe,length=10.0,width=1.5,image_intensity_sigma=25.,noise_type=noise_type)
+        for _ in tqdm(range(1))
     ]
 
     for trial in range(0, len(test_images)):
         noisy_signal = test_images[trial][0]
         truth_signal = test_images[trial][1]
+        max_intensity = np.max(noisy_signal)
+
+        hillas_results = hillas_parameters(cam, truth_signal)
+        kurtosis = hillas_results["kurtosis"]
+        intensity = hillas_results["intensity"]
+        length = hillas_results["length"].to_value(u.m)
+        width = hillas_results["width"].to_value(u.m)
+        cog_x = hillas_results["x"].to_value(u.m)
+        cog_y = hillas_results["y"].to_value(u.m)
+        psi = hillas_results["psi"].to_value(u.rad)
+        psi_uncertainty = hillas_results["psi_uncertainty"].to_value(u.rad)
 
         tailcut_signal = np.zeros_like(noisy_signal)
-        tailcut_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(cam, noisy_signal, tailcut_signal, original_count=False)
+        tailcut_mask, noisy_image_mean, noisy_background_mean, noisy_background_rms = cleaning_image(
+                cam, 
+                noisy_signal, 
+                tailcut_signal, 
+                original_count=True,
+                keep_main=False,
+                )
 
         denoising_signal = np.zeros_like(noisy_signal)
         denoising_mask = denoising_image(
@@ -706,6 +777,113 @@ if toy_test:
                 mask_correlation_norm += 1.0
         print(f"mask_correlation = {mask_correlation}")
 
+        display_scale = 3.*length
+
+        fig, ax = plt.subplots(1, 1, figsize=(1.0 * 6.4, 1.0 * 4.8))
+        display = CameraDisplay(cam, ax=ax)
+        display.image = truth_signal
+        display.cmap = "Reds"
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_truth.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del ax
+        plt.close()
+
+        values = []
+        titles = []
+        values += [truth_signal, noisy_signal, tailcut_signal]
+        titles += ["truth image", "noisy image", "tailcut cleaning"]
+        fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+        for ax1, trials1, title1 in zip(axs, values, titles):
+            display = CameraDisplay(cam, ax=ax1)
+            display.image = trials1
+            display.cmap = "Reds"
+            ax1.set_title(title1)
+            #ax1.set_ylim(cog_y-display_scale, cog_y+display_scale)
+            #ax1.set_xlim(cog_x-display_scale, cog_x+display_scale)
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_tailcut.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del axs
+        plt.close()
+
+        noisy_hist, noisy_bin_edges = histogram_with_bins(noisy_signal, bins=20, range=(1.,max_intensity))
+        truth_hist, truth_bin_edges = histogram_with_bins(truth_signal, bins=20, range=(1.,max_intensity))
+        tailcut_hist, tailcut_bin_edges = histogram_with_bins(tailcut_signal, bins=20, range=(1.,max_intensity))
+        values = []
+        titles = []
+        values += [truth_hist, noisy_hist, tailcut_hist]
+        titles += ["truth image", "noisy image", "tailcut cleaning"]
+        fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 3.6))
+        for ax1, trials1, title1 in zip(axs, values, titles):
+            ax1.bar(noisy_bin_edges[:-1], trials1, width=np.diff(noisy_bin_edges), align='edge', color='skyblue', edgecolor='black')
+            ax1.set_title(title1)
+            ax1.set_yscale("log")
+            label_x = "pixel intensity [p.e.]"
+            label_y = "count"
+            ax1.set_xlabel(label_x)
+            ax1.set_ylabel(label_y)
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_tailcut_hist.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del axs
+        plt.close()
+
+        values = []
+        titles = []
+        values += [noisy_signal, denoising_signal, denoising_signal*denoising_mask]
+        titles += ["noisy image", "CNN denoiser", "CNN denoiser + tailcut"]
+        fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
+        for ax1, trials1, title1 in zip(axs, values, titles):
+            display = CameraDisplay(cam, ax=ax1)
+            display.image = trials1
+            display.cmap = "Reds"
+            ax1.set_title(title1)
+            #ax1.set_ylim(cog_y-display_scale, cog_y+display_scale)
+            #ax1.set_xlim(cog_x-display_scale, cog_x+display_scale)
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_CNN.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del axs
+        plt.close()
+
+        denoising_hist, denoising_bin_edges = histogram_with_bins(denoising_signal, bins=20, range=(1.,max_intensity))
+        denoising_tailcut_hist, denoising_bin_edges = histogram_with_bins(denoising_signal*denoising_mask, bins=20, range=(1.,max_intensity))
+        values = []
+        titles = []
+        values += [noisy_hist, denoising_hist, denoising_tailcut_hist]
+        titles += ["noisy image", "CNN denoiser", "CNN denoiser + tailcut"]
+        fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 3.6))
+        for ax1, trials1, title1 in zip(axs, values, titles):
+            ax1.bar(noisy_bin_edges[:-1], trials1, width=np.diff(noisy_bin_edges), align='edge', color='skyblue', edgecolor='black')
+            ax1.set_title(title1)
+            ax1.set_yscale("log")
+            label_x = "pixel intensity [p.e.]"
+            label_y = "count"
+            ax1.set_xlabel(label_x)
+            ax1.set_ylabel(label_y)
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_CNN_hist.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del axs
+        plt.close()
+
+
         univ_inv_sol_image = np.zeros_like(noisy_signal)
         univ_inv_sol_mask, interm_Ys, noisy_image_mean, noisy_background_mean, noisy_background_rms = univ_inv_sol(
             denoiser_model_pkl,
@@ -717,23 +895,28 @@ if toy_test:
         )
         image_snr = (noisy_image_mean-noisy_background_mean)/noisy_background_rms
 
-        middle_step = int(0.5*float(len(interm_Ys)))+1
+        middle_step_1 = min(int(0.2*float(len(interm_Ys))),len(interm_Ys)-1)
+        middle_step_2 = min(int(0.4*float(len(interm_Ys))),len(interm_Ys)-1)
+        middle_step_3 = min(int(0.6*float(len(interm_Ys))),len(interm_Ys)-1)
+        middle_step_4 = min(int(0.8*float(len(interm_Ys))),len(interm_Ys)-1)
         values = []
         titles = []
-        values += [[noisy_signal, tailcut_signal, denoising_signal]]
-        titles += [["noisy image", "tailcut on noisy image", "original denoised image"]]
-        values += [[interm_Ys[1], interm_Ys[len(interm_Ys)//2], interm_Ys[len(interm_Ys)-1]]]
-        titles += [["t=1 step", f"t={len(interm_Ys)//2} step", f"t={len(interm_Ys)-1} step"]]
+        values += [[noisy_signal, interm_Ys[middle_step_1], interm_Ys[middle_step_2]]]
+        titles += [["noisy image", f"t={middle_step_1} step", f"t={middle_step_2} step"]]
+        values += [[interm_Ys[middle_step_3], interm_Ys[middle_step_4], interm_Ys[len(interm_Ys)-1]]]
+        titles += [[f"t={middle_step_3} step", f"t={middle_step_4} step", f"t={len(interm_Ys)-1} step"]]
         fig, axs = plt.subplots(2, 3, figsize=(3.0 * 6.4, 2.0 * 4.8))
         for ax1, trials1, title1 in zip(axs, values, titles):
             for ax2, trials2, title2 in zip(ax1, trials1, title1):
+                if len(trials2)==0: continue
                 display = CameraDisplay(cam, ax=ax2)
                 display.image = trials2
                 display.cmap = "Reds"
-                #display.cmap = "Greys"
                 ax2.set_title(title2)
+                #ax2.set_ylim(cog_y-display_scale, cog_y+display_scale)
+                #ax2.set_xlim(cog_x-display_scale, cog_x+display_scale)
         fig.savefig(
-            f"{ctapipe_output}/output_plots/image_trial_{trial}_universal_vs_tailcut.png", 
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_iterations.png", 
             dpi=300,
             bbox_inches="tight",
         )
@@ -741,20 +924,44 @@ if toy_test:
         del axs
         plt.close()
 
-        middle_step = int(0.5*float(len(interm_Ys)))+1
         values = []
         titles = []
-        values += [noisy_signal, truth_signal, denoising_signal]
-        titles += ["noisy image", "truth image", "denoised image"]
+        values += [noisy_signal, interm_Ys[len(interm_Ys)-1], univ_inv_sol_image]
+        titles += ["noisy image", "universal denoiser", "universal denoiser + tailcut"]
         fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 4.8))
         for ax1, trials1, title1 in zip(axs, values, titles):
             display = CameraDisplay(cam, ax=ax1)
             display.image = trials1
             display.cmap = "Reds"
-            #display.cmap = "Greys"
             ax1.set_title(title1)
+            #ax1.set_ylim(cog_y-display_scale, cog_y+display_scale)
+            #ax1.set_xlim(cog_x-display_scale, cog_x+display_scale)
         fig.savefig(
-            f"{ctapipe_output}/output_plots/image_trial_{trial}_universal_vs_original.png", 
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_universal.png", 
+            dpi=300,
+            bbox_inches="tight",
+        )
+        del fig
+        del axs
+        plt.close()
+
+        universal_hist, universal_bin_edges = histogram_with_bins(interm_Ys[len(interm_Ys)-1], bins=20, range=(1.,max_intensity))
+        universal_tailcut_hist, universal_bin_edges = histogram_with_bins(univ_inv_sol_image, bins=20, range=(1.,max_intensity))
+        values = []
+        titles = []
+        values += [noisy_hist, universal_hist, universal_tailcut_hist]
+        titles += ["noisy image", "universal denoiser", "universal denoiser + tailcut"]
+        fig, axs = plt.subplots(1, 3, figsize=(3.0 * 6.4, 1.0 * 3.6))
+        for ax1, trials1, title1 in zip(axs, values, titles):
+            ax1.bar(noisy_bin_edges[:-1], trials1, width=np.diff(noisy_bin_edges), align='edge', color='skyblue', edgecolor='black')
+            ax1.set_title(title1)
+            ax1.set_yscale("log")
+            label_x = "pixel intensity [p.e.]"
+            label_y = "count"
+            ax1.set_xlabel(label_x)
+            ax1.set_ylabel(label_y)
+        fig.savefig(
+            f"{ctapipe_output}/output_plots/{ana_tag}_image_trial_{trial}_universal_hist.png", 
             dpi=300,
             bbox_inches="tight",
         )
@@ -763,7 +970,7 @@ if toy_test:
         plt.close()
 
 
-if sim_test:
+if project=='sim_test':
 
     sim_files = None
     if "SCT" in ana_tag:

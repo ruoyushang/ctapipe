@@ -32,31 +32,21 @@ config = {}
 config["keep_main"] = True
 config["restore"] = True
 config["denoise_threshold"] = 7.
-config["cleaning_picture"] = 3.
-config["cleaning_boundary"] = 2.
-denoise_tag = 'test1'
-list_config += [config]
-list_config_tag += [denoise_tag]
-
-config = {}
-config["keep_main"] = True
-config["restore"] = True
-config["denoise_threshold"] = 7.
 config["cleaning_picture"] = 4.
 config["cleaning_boundary"] = 3.
 denoise_tag = 'test2'
 list_config += [config]
 list_config_tag += [denoise_tag]
-
-config = {}
-config["keep_main"] = True
-config["restore"] = True
-config["denoise_threshold"] = 7.
-config["cleaning_picture"] = 5.
-config["cleaning_boundary"] = 4.
-denoise_tag = 'test3'
-list_config += [config]
-list_config_tag += [denoise_tag]
+#
+#config = {}
+#config["keep_main"] = True
+#config["restore"] = True
+#config["denoise_threshold"] = 7.
+#config["cleaning_picture"] = 5.
+#config["cleaning_boundary"] = 4.
+#denoise_tag = 'test3'
+#list_config += [config]
+#list_config_tag += [denoise_tag]
 
 
 
@@ -71,8 +61,8 @@ array_type = 'SCT'
 # array_type = 'MIX'
 #array_type = 'LSTCam_NectarCam_ASTRICam'
 
-pointing = 'proton'
-#pointing = "onaxis"
+#pointing = 'proton'
+pointing = "onaxis"
 # pointing = 'diffuse'
 
 if len(sys.argv)>1:
